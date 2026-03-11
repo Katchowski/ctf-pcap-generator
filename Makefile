@@ -1,4 +1,4 @@
-.PHONY: build run test lint shell stop clean
+.PHONY: build run test lint shell stop clean docs-check
 
 build:
 	docker compose build
@@ -21,3 +21,6 @@ stop:
 
 clean:
 	docker compose down -v --rmi local
+
+docs-check:
+	./scripts/verify-docs.sh

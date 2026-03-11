@@ -1,0 +1,10 @@
+exclude = [
+]
+
+exclude_loopback = true
+
+timeout = 30
+
+max_retries = 2
+
+include_mail = false

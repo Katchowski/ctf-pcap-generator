@@ -1,0 +1,32 @@
+name: Docs
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-links:
+    name: Markdown lint & link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DavidAnson/markdownlint-cli2-action@v22
+        with:
+          globs: '**/*.md'
+
+      - uses: lychee/lychee-action@v2
+        with:
+          args: '--verbose --no-progress ./**/*.md'
+          fail: true
+
+  docs-sync:
+    name: Docs-code sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run docs verification
+        run: |
+          chmod +x scripts/verify-docs.sh
+          ./scripts/verify-docs.sh

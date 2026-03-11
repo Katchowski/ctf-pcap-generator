@@ -21,12 +21,17 @@ htmlcov/
 # Environment
 .env
 
-# Generated output (keep .gitkeep)
-output/*.pcap
-output/**/*.pcap
+# Generated output (keep .gitkeep for directory structure)
+output/*
+!output/.gitkeep
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Development/planning artifacts
+.planning/
+.claude/
+nul
