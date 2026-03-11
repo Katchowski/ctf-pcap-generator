@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+
+{% block title %}Push Challenge to CTFd - CTF PCAP Generator{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <h2 class="mb-4">Push Challenge to CTFd</h2>
+
+    {# File info card #}
+    <div class="card mb-4">
+      <div class="card-body">
+        <h6 class="card-subtitle mb-2 text-muted">PCAP File</h6>
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr>
+              <th style="width: 120px;">Filename</th>
+              <td>{{ entry.filename }}</td>
+            </tr>
+            <tr>
+              <th>File Size</th>
+              <td>
+                {% if entry.file_size_bytes %}
+                  {% if entry.file_size_bytes < 1048576 %}
+                    {{ "%.1f"|format(entry.file_size_bytes / 1024) }} KB
+                  {% else %}
+                    {{ "%.1f"|format(entry.file_size_bytes / 1048576) }} MB
+                  {% endif %}
+                {% else %}
+                  -
+                {% endif %}
+              </td>
+            </tr>
+            <tr>
+              <th>Difficulty</th>
+              <td>{{ (entry.difficulty or 'None')|title }}</td>
+            </tr>
+            {% if entry.flag_text %}
+            <tr>
+              <th>Flag</th>
+              <td><code>{{ entry.flag_text }}</code></td>
+            </tr>
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if not entry.file_exists %}
+    <div class="alert alert-warning">
+      This PCAP file no longer exists on disk. Generate a new one before pushing.
+    </div>
+    {% else %}
+
+    {% if entry.pushed %}
+    <div class="alert alert-warning">
+      This PCAP was already pushed as "{{ entry.push_challenge_name }}".
+      You can push again with a different name.
+    </div>
+    {% endif %}
+
+    {# Push form #}
+    <div class="card">
+      <div class="card-header">
+        <h5 class="mb-0">Challenge Metadata</h5>
+      </div>
+      <div class="card-body">
+        <form hx-post="/api/ctfd/push"
+              hx-target="#push-result"
+              hx-swap="innerHTML"
+              hx-indicator="#push-spinner">
+
+          <input type="hidden" name="filename" value="{{ entry.filename }}">
+
+          <div class="mb-3">
+            <label for="name" class="form-label">Challenge Name</label>
+            <input type="text" class="form-control" name="name" id="name"
+                   value="{{ entry.scenario_name or entry.scenario_slug }}" required>
+          </div>
+
+          <div class="mb-3">
+            <label for="description" class="form-label">Description</label>
+            <textarea class="form-control" name="description" id="description"
+                      rows="3">{{ entry.scenario_description or '' }}</textarea>
+          </div>
+
+          <div class="row">
+            <div class="col-md-4 mb-3">
+              <label for="category" class="form-label">Category</label>
+              <input type="text" class="form-control" name="category" id="category"
+                     value="{{ entry.category_label or '' }}">
+            </div>
+            <div class="col-md-4 mb-3">
+              <label for="value" class="form-label">Points</label>
+              <input type="number" class="form-control" name="value" id="value"
+                     value="{{ default_points }}" min="0" required>
+            </div>
+            <div class="col-md-4 mb-3">
+              <label for="state" class="form-label">State</label>
+              <select class="form-select" name="state" id="state">
+                <option value="hidden" selected>Hidden</option>
+                <option value="visible">Visible</option>
+              </select>
+            </div>
+          </div>
+
+          <button type="submit" class="btn btn-primary">
+            Push to CTFd
+          </button>
+          <a href="/push" class="btn btn-outline-secondary ms-2">Back to List</a>
+          <span id="push-spinner" class="htmx-indicator ms-2">
+            <span class="spinner-border spinner-border-sm" role="status"></span>
+            Pushing to CTFd...
+          </span>
+        </form>
+
+        <div id="push-result" class="mt-3"></div>
+      </div>
+    </div>
+
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

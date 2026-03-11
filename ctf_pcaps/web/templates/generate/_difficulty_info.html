@@ -1,0 +1,7 @@
+<div class="alert alert-info py-2 px-3 mb-0">
+  <strong>{{ preset.name|title }}:</strong>
+  Encoding: {{ preset.encoding_chain|join(' -> ') }} |
+  Noise: {{ (preset.noise_ratio * 100)|int }}% |
+  Packets: {{ preset.packet_count_min }}-{{ preset.packet_count_max }} |
+  Noise types: {{ preset.noise_types|join(', ') }}
+</div>

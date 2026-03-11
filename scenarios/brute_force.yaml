@@ -1,0 +1,32 @@
+builder: brute_force
+protocol: tcp
+metadata:
+  name: "Brute Force Login"
+  description: "HTTP form login brute force with multiple failed attempts before a successful login"
+  category: "network_attack"
+  difficulty_hint: "medium"
+parameters:
+  dst_ip:
+    default: "10.0.0.50"
+    description: "Target web server IP"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Target web server port"
+  target_host:
+    default: "login.example.com"
+    description: "HTTP Host header value"
+  attempt_count:
+    default: 15
+    min: 10
+    max: 20
+    description: "Number of failed login attempts before success"
+  success_username:
+    default: "admin"
+    description: "Username for the successful login"
+  success_password:
+    default: "Welcome2024!"
+    description: "Password for the successful login"
+steps:
+  - action: brute_force_login

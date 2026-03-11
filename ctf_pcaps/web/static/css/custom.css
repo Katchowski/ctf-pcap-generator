@@ -1,0 +1,55 @@
+/* Category badge colors */
+.badge-network_attack {
+    background-color: #0d6efd;
+    color: white;
+}
+
+.badge-web_traffic {
+    background-color: #198754;
+    color: white;
+}
+
+.badge-covert_channel {
+    background-color: #6f42c1;
+    color: white;
+}
+
+.badge-malware_c2 {
+    background-color: #dc3545;
+    color: white;
+}
+
+.badge-unknown {
+    background-color: #6c757d;
+    color: white;
+}
+
+/* Difficulty hint badge colors */
+.badge-easy {
+    background-color: #198754;
+    color: white;
+}
+
+.badge-medium {
+    background-color: #fd7e14;
+    color: white;
+}
+
+.badge-hard {
+    background-color: #dc3545;
+    color: white;
+}
+
+/* Card hover effect */
+.scenario-card:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    transition: box-shadow 0.2s;
+}
+
+/* Card description truncation */
+.card-description {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}

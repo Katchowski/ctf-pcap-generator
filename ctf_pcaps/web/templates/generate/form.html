@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Generate: {{ scenario.name }} - CTF PCAP Generator{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/scenarios">Scenarios</a></li>
+    <li class="breadcrumb-item active">{{ scenario.name }}</li>
+  </ol>
+</nav>
+
+<h1>{{ scenario.name }}</h1>
+<p class="text-muted">{{ scenario.description }}</p>
+
+<div id="form-area">
+
+  <h4>Flag</h4>
+  <div class="form-check form-switch mb-3">
+    <input class="form-check-input" type="checkbox" id="embed_flag" name="embed_flag" checked
+           onchange="document.getElementById('flag-fields').style.display = this.checked ? 'block' : 'none'">
+    <label class="form-check-label" for="embed_flag">Embed flag in PCAP</label>
+  </div>
+  <div id="flag-fields">
+    <div class="mb-3">
+      <label for="flag_text" class="form-label">Flag Text</label>
+      <input type="text" class="form-control" name="flag_text" id="flag_text"
+             placeholder="Leave blank to auto-generate">
+    </div>
+    <div class="mb-3">
+      <label for="flag_format" class="form-label">Flag Format</label>
+      <select class="form-select" name="flag_format" id="flag_format">
+        <option value="flag">flag{...}</option>
+        <option value="CTF">CTF{...}</option>
+        <option value="ctf">ctf{...}</option>
+      </select>
+    </div>
+  </div>
+
+  <h4 class="mt-4">Difficulty</h4>
+  <div class="mb-3">
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="difficulty" id="diff_none" value="none" checked
+             hx-get="/api/difficulty/none" hx-target="#difficulty-info" hx-swap="innerHTML">
+      <label class="form-check-label" for="diff_none">None</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="difficulty" id="diff_easy" value="easy"
+             hx-get="/api/difficulty/easy" hx-target="#difficulty-info" hx-swap="innerHTML">
+      <label class="form-check-label" for="diff_easy">Easy</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="difficulty" id="diff_medium" value="medium"
+             hx-get="/api/difficulty/medium" hx-target="#difficulty-info" hx-swap="innerHTML">
+      <label class="form-check-label" for="diff_medium">Medium</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="difficulty" id="diff_hard" value="hard"
+             hx-get="/api/difficulty/hard" hx-target="#difficulty-info" hx-swap="innerHTML">
+      <label class="form-check-label" for="diff_hard">Hard</label>
+    </div>
+  </div>
+  <div id="difficulty-info" class="mt-2"></div>
+
+  <h4 class="mt-4">Parameters</h4>
+  {% for name, param in scenario.parameters.items() %}
+  <div class="mb-3">
+    <label for="param_{{ name }}" class="form-label">{{ name }}</label>
+    {% if param.choices %}
+    <select class="form-select" name="param_{{ name }}" id="param_{{ name }}">
+      {% for choice in param.choices %}
+      <option value="{{ choice }}"{% if choice == param.default %} selected{% endif %}>{{ choice }}</option>
+      {% endfor %}
+    </select>
+    {% elif param.default is number %}
+    <input type="number" class="form-control" name="param_{{ name }}" id="param_{{ name }}"
+           value="{{ param.default }}"{% if param.min is not none %} min="{{ param.min }}"{% endif %}{% if param.max is not none %} max="{{ param.max }}"{% endif %}>
+    {% elif param.default is sequence and param.default is not string %}
+    <textarea class="form-control" name="param_{{ name }}" id="param_{{ name }}">{{ param.default | join(', ') }}</textarea>
+    {% else %}
+    <input type="text" class="form-control" name="param_{{ name }}" id="param_{{ name }}"
+           value="{{ param.default }}">
+    {% endif %}
+    {% if param.description %}
+    <div class="form-text">{{ param.description }}</div>
+    {% endif %}
+    <div class="invalid-feedback"></div>
+  </div>
+  {% endfor %}
+
+  <div id="error-banner"></div>
+  <button type="button" class="btn btn-primary btn-lg mt-3" id="generate-btn" onclick="startGeneration()">Generate PCAP</button>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function startGeneration() {
+    var params = new URLSearchParams();
+    var embedFlag = document.getElementById('embed_flag');
+    if (embedFlag && embedFlag.checked) {
+        var flagText = document.querySelector('[name="flag_text"]').value;
+        if (flagText) params.set('flag_text', flagText);
+        else params.set('flag_text', '');
+        params.set('flag_format', document.querySelector('[name="flag_format"]').value);
+    }
+    var diffRadio = document.querySelector('input[name="difficulty"]:checked');
+    if (diffRadio && diffRadio.value !== 'none') {
+        params.set('difficulty', diffRadio.value);
+    }
+    {% for name, param in scenario.parameters.items() %}
+    var el = document.querySelector('[name="param_{{ name }}"]');
+    if (el) params.set('param_{{ name }}', el.value);
+    {% endfor %}
+
+    var formArea = document.getElementById('form-area');
+    var sseUrl = '/generate/{{ scenario.slug }}/stream?' + params.toString();
+    formArea.innerHTML = '<div hx-ext="sse" sse-connect="' + sseUrl + '" sse-close="complete">' +
+        '<div id="progress-area" sse-swap="progress" hx-swap="innerHTML"></div>' +
+        '<div id="result-area" sse-swap="complete" hx-swap="innerHTML"></div>' +
+        '</div>';
+    htmx.process(formArea);
+}
+</script>
+{% endblock %}

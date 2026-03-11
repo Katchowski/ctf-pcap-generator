@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}Scenarios - CTF PCAP Generator{% endblock %}
+
+{% block content %}
+<h1 class="mb-3">Scenarios</h1>
+<p class="text-muted">Browse available PCAP generation scenarios. Select one to configure and generate.</p>
+
+<ul class="nav nav-tabs mb-4">
+    <li class="nav-item">
+        <a class="nav-link active"
+           href="#"
+           hx-get="{{ url_for('main.scenario_cards') }}"
+           hx-target="#card-grid"
+           hx-swap="innerHTML"
+           onclick="document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active')); this.classList.add('active');">All</a>
+    </li>
+    {% for cat_value, cat_label in categories.items() %}
+    <li class="nav-item">
+        <a class="nav-link"
+           href="#"
+           hx-get="{{ url_for('main.scenario_cards', category=cat_value) }}"
+           hx-target="#card-grid"
+           hx-swap="innerHTML"
+           onclick="document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active')); this.classList.add('active');">{{ cat_label }}</a>
+    </li>
+    {% endfor %}
+</ul>
+
+<div id="card-grid">{% include "scenarios/_card_grid.html" %}</div>
+{% endblock %}

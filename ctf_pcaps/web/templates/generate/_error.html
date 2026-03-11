@@ -1,0 +1,40 @@
+{% if error_message %}
+<div class="alert alert-danger alert-dismissible fade show mt-4">
+  <strong>Error:</strong> {{ error_message }}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if errors %}
+{% set pipeline_fields = ["builder", "limits", "flag", "difficulty"] %}
+{% set field_errors = [] %}
+{% set pipeline_errors = [] %}
+{% for e in errors %}
+  {% if e.field in pipeline_fields %}
+    {% set _ = pipeline_errors.append(e) %}
+  {% else %}
+    {% set _ = field_errors.append(e) %}
+  {% endif %}
+{% endfor %}
+{% if field_errors %}
+<div class="alert alert-warning alert-dismissible fade show mt-4">
+  <strong>Validation Errors:</strong>
+  <ul class="mb-0">
+    {% for e in field_errors %}
+    <li><strong>{{ e.field }}:</strong> {{ e.message }}</li>
+    {% endfor %}
+  </ul>
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% if pipeline_errors %}
+<div class="alert alert-danger alert-dismissible fade show mt-4">
+  {% for e in pipeline_errors %}
+  <strong>{{ e.error_type | replace('_', ' ') | title }}:</strong> {{ e.message }}<br>
+  {% endfor %}
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+{% endif %}
+{% if scenario_slug %}
+<a href="/generate/{{ scenario_slug }}" class="btn btn-outline-primary mt-2">Try Again</a>
+{% endif %}

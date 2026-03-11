@@ -1,0 +1,12 @@
+{% if success %}
+<div class="alert alert-success" role="alert">
+  Challenge pushed to CTFd successfully!
+  {% if admin_url %}
+  <a href="{{ admin_url }}" target="_blank" rel="noopener">View in CTFd</a>
+  {% endif %}
+</div>
+{% elif error %}
+<div class="alert alert-danger" role="alert">
+  {{ error|safe }}
+</div>
+{% endif %}

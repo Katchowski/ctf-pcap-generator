@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+
+{% block title %}Push to CTFd - CTF PCAP Generator{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-10">
+    <h2 class="mb-4">Push to CTFd</h2>
+
+    {% if not history %}
+    <div class="alert alert-info">
+      No generated PCAPs yet. <a href="/scenarios" class="alert-link">Generate a scenario</a> first.
+    </div>
+    {% else %}
+    <div class="table-responsive">
+      <table class="table table-hover">
+        <thead>
+          <tr>
+            <th>Scenario</th>
+            <th>Difficulty</th>
+            <th>Flag</th>
+            <th>File Size</th>
+            <th>Generated</th>
+            <th>Status</th>
+            <th>Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in history %}
+          <tr>
+            <td>{{ entry.scenario_name or entry.scenario_slug }}</td>
+            <td>{{ (entry.difficulty or 'N/A')|title }}</td>
+            <td>
+              {% if entry.flag_text %}
+              <code class="small">{{ entry.flag_text[:30] }}{% if entry.flag_text|length > 30 %}...{% endif %}</code>
+              {% else %}
+              <span class="text-muted">None</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if entry.file_size_bytes %}
+                {% if entry.file_size_bytes < 1048576 %}
+                  {{ "%.1f"|format(entry.file_size_bytes / 1024) }} KB
+                {% else %}
+                  {{ "%.1f"|format(entry.file_size_bytes / 1048576) }} MB
+                {% endif %}
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td>
+              {% if entry.timestamp %}
+              <span class="small">{{ entry.timestamp[:19].replace('T', ' ') }}</span>
+              {% else %}
+              -
+              {% endif %}
+            </td>
+            <td>
+              {% if not entry.file_exists %}
+              <span class="badge bg-warning text-dark">File Expired</span>
+              {% elif entry.pushed %}
+              <span class="badge bg-info">Pushed</span>
+              {% else %}
+              <span class="badge bg-secondary">Not Pushed</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if not entry.file_exists %}
+              {# No button for expired files #}
+              {% else %}
+              <a href="/download/{{ entry.filename }}" class="btn btn-sm btn-success me-1">Download</a>
+              {% if entry.pushed %}
+              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-outline-info">Push Again</a>
+              {% else %}
+              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-primary">Push</a>
+              {% endif %}
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

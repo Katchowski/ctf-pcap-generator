@@ -1,0 +1,19 @@
+builder: syn_scan
+protocol: tcp
+metadata:
+  name: "SYN Port Scan"
+  description: "Stealthy SYN (half-open) port scan against common service ports"
+  category: "network_attack"
+  difficulty_hint: "easy"
+parameters:
+  dst_ip:
+    default: "10.0.0.100"
+    description: "Target IP address to scan"
+  ports:
+    default: [21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 3306, 3389, 8080]
+    description: "List of ports to scan"
+  open_ports:
+    default: [22, 80, 443]
+    description: "Ports that respond as open (SYN-ACK)"
+steps:
+  - action: scan

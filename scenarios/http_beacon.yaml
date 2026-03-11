@@ -1,0 +1,26 @@
+builder: http_beacon
+protocol: tcp
+metadata:
+  name: "HTTP Beaconing / C2"
+  description: "Periodic HTTP callbacks with base64-encoded C2 commands disguised as CDN traffic"
+  category: "malware_c2"
+  difficulty_hint: "hard"
+parameters:
+  dst_ip:
+    default: "198.51.100.10"
+    description: "C2 server IP address"
+  dport:
+    default: 443
+    min: 1
+    max: 65535
+    description: "C2 server port"
+  c2_host:
+    default: "cdn-static.updates.com"
+    description: "HTTP Host header (disguised C2 domain)"
+  beacon_count:
+    default: 8
+    min: 5
+    max: 10
+    description: "Number of beacon check-in cycles"
+steps:
+  - action: beacon_callback

@@ -1,0 +1,8 @@
+<div class="row g-4">
+{% for scenario in scenarios %}
+    <div class="col-lg-4 col-md-6">{% include "scenarios/_card.html" %}</div>
+{% endfor %}
+{% if not scenarios %}
+    <div class="col-12"><p class="text-muted">No scenarios found for this category.</p></div>
+{% endif %}
+</div>

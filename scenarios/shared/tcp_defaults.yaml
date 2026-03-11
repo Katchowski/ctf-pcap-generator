@@ -1,0 +1,8 @@
+dst_ip:
+  default: "10.0.0.2"
+  description: "Target IP address"
+dport:
+  default: 80
+  min: 1
+  max: 65535
+  description: "Target port"

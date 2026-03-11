@@ -1,0 +1,15 @@
+<div class="card scenario-card h-100">
+    <div class="card-body">
+        <span class="badge badge-{{ scenario.category }} mb-2">{{ scenario.category_label }}</span>
+        <h5 class="card-title">{{ scenario.name }}</h5>
+        <p class="card-text card-description">{{ scenario.description }}</p>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center">
+        {% if scenario.difficulty_hint %}
+        <span class="badge badge-{{ scenario.difficulty_hint }}">{{ scenario.difficulty_hint|title }}</span>
+        {% else %}
+        <span></span>
+        {% endif %}
+        <a href="/generate/{{ scenario.slug }}" class="btn btn-primary btn-sm">Generate</a>
+    </div>
+</div>

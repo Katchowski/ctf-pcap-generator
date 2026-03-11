@@ -1,0 +1,27 @@
+builder: sqli
+protocol: tcp
+metadata:
+  name: "SQL Injection"
+  description: "HTTP GET SQL injection progressing from tautology probes to UNION SELECT data extraction"
+  category: "web_traffic"
+  difficulty_hint: "medium"
+parameters:
+  dst_ip:
+    default: "10.0.0.80"
+    description: "Target web server IP"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Target web server port"
+  target_host:
+    default: "shop.example.com"
+    description: "HTTP Host header value"
+  path:
+    default: "/search"
+    description: "URL path for injection target"
+  param_name:
+    default: "q"
+    description: "Query parameter name for injection"
+steps:
+  - action: sqli_attack

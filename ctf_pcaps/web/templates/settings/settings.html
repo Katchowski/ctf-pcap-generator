@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - CTF PCAP Generator{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-lg-8">
+    <h2 class="mb-4">Settings</h2>
+
+    <div class="card">
+      <div class="card-header">
+        <h5 class="mb-0">CTFd Connection</h5>
+      </div>
+      <div class="card-body">
+        <p class="text-muted">
+          Configure the connection to your CTFd instance.
+          Saving will automatically test the connection.
+        </p>
+
+        <form hx-post="/api/ctfd/settings"
+              hx-target="#connection-status"
+              hx-swap="innerHTML"
+              hx-indicator="#save-spinner">
+          <div class="mb-3">
+            <label for="ctfd_url" class="form-label">CTFd Instance URL</label>
+            <input type="url" class="form-control" name="ctfd_url" id="ctfd_url"
+                   value="{{ config.url }}"
+                   placeholder="https://ctfd.example.com" required>
+          </div>
+          <div class="mb-3">
+            <label for="ctfd_token" class="form-label">API Token</label>
+            <input type="password" class="form-control" name="ctfd_token" id="ctfd_token"
+                   value="{{ config.token }}"
+                   placeholder="Your CTFd API token" required>
+            <div class="form-text">
+              Generate a token in CTFd under Settings &gt; Access Tokens.
+            </div>
+          </div>
+          {% if next_url %}
+          <input type="hidden" name="next" value="{{ next_url }}">
+          {% endif %}
+          <button type="submit" class="btn btn-primary">
+            Save &amp; Test Connection
+          </button>
+          <span id="save-spinner" class="htmx-indicator ms-2">
+            <span class="spinner-border spinner-border-sm" role="status"></span>
+            Testing connection...
+          </span>
+        </form>
+
+        <div id="connection-status" class="mt-3"></div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

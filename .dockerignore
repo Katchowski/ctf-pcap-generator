@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+output/*.pcap
+.env
+*.md
+!requirements*.md
+.planning/
+.claude/
+.idea/
+.vscode/

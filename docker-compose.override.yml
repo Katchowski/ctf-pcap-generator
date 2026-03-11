@@ -1,0 +1,10 @@
+services:
+  web:
+    volumes:
+      - .:/app
+      - /app/.venv  # Anonymous volume preserves installed packages
+    command: flask run --host=0.0.0.0 --port=5000 --reload
+    environment:
+      - FLASK_APP=ctf_pcaps.web:create_app()
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1

@@ -1,0 +1,22 @@
+builder: simple_tcp
+protocol: tcp
+metadata:
+  name: "Simple TCP Session"
+  description: "Demo TCP session with data transfer"
+  category: "network_attack"
+  difficulty_hint: "easy"
+parameters:
+  dst_ip:
+    default: "10.0.0.2"
+    description: "Target IP address"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Target port"
+  payload:
+    default: "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    description: "Data to send after handshake"
+steps:
+  - action: send_data
+    payload: "{{ payload }}"
