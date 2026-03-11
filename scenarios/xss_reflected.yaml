@@ -1,0 +1,32 @@
+builder: xss_reflected
+protocol: tcp
+metadata:
+  name: "XSS Reflected"
+  description: "Reflected cross-site scripting attack with progressively sophisticated payloads reflected unescaped in HTTP responses"
+  category: "web_traffic"
+  difficulty_hint: "medium"
+parameters:
+  src_ip:
+    default: "10.0.0.10"
+    description: "Attacker IP address"
+  dst_ip:
+    default: "10.0.0.80"
+    description: "Target web server IP"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Target web server port"
+  target_host:
+    default: "webapp.example.com"
+    description: "HTTP Host header value"
+  param_name:
+    default: "search"
+    description: "Query parameter name for XSS injection"
+  payload_count:
+    default: 4
+    min: 3
+    max: 8
+    description: "Number of XSS payloads to send"
+steps:
+  - action: xss_reflected_attack

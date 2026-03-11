@@ -1,0 +1,55 @@
+<div class="my-4">
+  <h5>Pushing: {{ pushed }}/{{ total }} challenges</h5>
+  {% set overall_pct = ((pushed / total) * 100) | int if total > 0 else 0 %}
+  <div class="progress mb-3" style="height: 25px;">
+    <div class="progress-bar progress-bar-striped {% if complete|default(false) %}bg-success{% else %}progress-bar-animated bg-primary{% endif %}"
+         role="progressbar"
+         style="width: {{ overall_pct }}%"
+         aria-valuenow="{{ overall_pct }}"
+         aria-valuemin="0"
+         aria-valuemax="100">{{ overall_pct }}%</div>
+  </div>
+  {% if complete|default(false) %}
+  <div class="alert {% if error_count|default(0) > 0 %}alert-warning{% else %}alert-success{% endif %} mb-3">
+    Push complete: {{ pushed_count|default(0) }} pushed{% if error_count|default(0) > 0 %}, {{ error_count }} failed{% endif %}.
+  </div>
+  {% endif %}
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Challenge</th>
+        <th>Status</th>
+        <th>Details</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in push_status %}
+      <tr>
+        <td>{{ item.name }}</td>
+        <td>
+          {% if item.status == 'queued' %}
+          <span class="badge bg-secondary">Queued</span>
+          {% elif item.status == 'pushing' %}
+          <span class="badge bg-primary">Pushing</span>
+          {% elif item.status == 'done' %}
+          <span class="badge bg-success">Pushed</span>
+          {% elif item.status == 'error' %}
+          <span class="badge bg-danger">Error</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if item.status == 'done' and item.challenge_id %}
+          <small class="text-success">Challenge #{{ item.challenge_id }}</small>
+          {% elif item.status == 'error' and item.error %}
+          <small class="text-danger">{{ item.error }}</small>
+          {% elif item.status == 'pushing' %}
+          <div class="spinner-border spinner-border-sm text-primary" role="status">
+            <span class="visually-hidden">Pushing...</span>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

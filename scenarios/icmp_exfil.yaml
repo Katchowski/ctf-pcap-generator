@@ -1,0 +1,37 @@
+builder: icmp_exfil
+protocol: tcp
+metadata:
+  name: "ICMP Exfiltration"
+  description: "Covert data exfiltration via encoded chunks hidden in ICMP echo request payloads"
+  category: "covert_channel"
+  difficulty_hint: "hard"
+parameters:
+  victim_ip:
+    default: "10.0.0.50"
+    description: "Compromised host IP address sending exfiltration data"
+  attacker_ip:
+    default: "10.0.0.200"
+    description: "Attacker/receiver IP address collecting exfiltrated data"
+  chunk_size:
+    default: 32
+    min: 16
+    max: 128
+    description: "Bytes per ICMP payload chunk"
+  chunk_count:
+    default: 10
+    min: 4
+    max: 30
+    description: "Maximum number of exfiltration chunks"
+  icmp_id:
+    default: 0
+    description: "ICMP identifier (0 = random)"
+  control_port:
+    default: 4444
+    min: 1
+    max: 65535
+    description: "TCP control channel port for exfil initialization"
+  exfil_data:
+    default: ""
+    description: "Custom exfiltration data (empty = auto-generated with flag)"
+steps:
+  - action: icmp_exfiltration

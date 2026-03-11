@@ -245,6 +245,7 @@ class TestResolveDifficulty:
             "packet_count_target",
             "noise_types",
             "timing_jitter_ms",
+            "split_count",
         }
         assert set(result.keys()) == expected_keys
 
@@ -337,3 +338,115 @@ class TestResolveDifficulty:
 
         result2 = resolve_difficulty("MEDIUM")
         assert result2["encoding_chain"] == ["base64"]
+
+
+# ---------------------------------------------------------------------------
+# Split Count Fields (Phase 10)
+# ---------------------------------------------------------------------------
+
+
+class TestDifficultyPresetSplitCount:
+    """Tests for DifficultyPreset split_count_min/split_count_max fields."""
+
+    def test_preset_accepts_split_count_fields(self):
+        """DifficultyPreset accepts split_count_min and split_count_max."""
+        preset = DifficultyPreset(
+            name="easy",
+            encoding_chain=["plaintext"],
+            noise_ratio=0.2,
+            packet_count_min=20,
+            packet_count_max=50,
+            noise_types=["ARP"],
+            timing_jitter_ms=(10.0, 50.0),
+            split_count_min=2,
+            split_count_max=4,
+        )
+        assert preset.split_count_min == 2
+        assert preset.split_count_max == 4
+
+    def test_split_count_defaults_to_one(self):
+        """Default split_count_min and split_count_max are both 1."""
+        preset = DifficultyPreset(
+            name="easy",
+            encoding_chain=["plaintext"],
+            noise_ratio=0.2,
+            packet_count_min=20,
+            packet_count_max=50,
+            noise_types=["ARP"],
+            timing_jitter_ms=(10.0, 50.0),
+        )
+        assert preset.split_count_min == 1
+        assert preset.split_count_max == 1
+
+    def test_split_count_min_exceeds_max_rejected(self):
+        """DifficultyPreset rejects split_count_min > split_count_max."""
+        with pytest.raises(ValidationError):
+            DifficultyPreset(
+                name="easy",
+                encoding_chain=["plaintext"],
+                noise_ratio=0.2,
+                packet_count_min=20,
+                packet_count_max=50,
+                noise_types=["ARP"],
+                timing_jitter_ms=(10.0, 50.0),
+                split_count_min=5,
+                split_count_max=3,
+            )
+
+    def test_split_count_min_below_one_rejected(self):
+        """DifficultyPreset rejects split_count_min < 1."""
+        with pytest.raises(ValidationError):
+            DifficultyPreset(
+                name="easy",
+                encoding_chain=["plaintext"],
+                noise_ratio=0.2,
+                packet_count_min=20,
+                packet_count_max=50,
+                noise_types=["ARP"],
+                timing_jitter_ms=(10.0, 50.0),
+                split_count_min=0,
+                split_count_max=1,
+            )
+
+
+class TestPresetSplitCountValues:
+    """Tests for preset constants split_count values."""
+
+    def test_easy_split_count(self):
+        """EASY preset has split_count 1-1 (no splitting)."""
+        assert EASY.split_count_min == 1
+        assert EASY.split_count_max == 1
+
+    def test_medium_split_count(self):
+        """MEDIUM preset has split_count 2-2."""
+        assert MEDIUM.split_count_min == 2
+        assert MEDIUM.split_count_max == 2
+
+    def test_hard_split_count(self):
+        """HARD preset has split_count 3-4."""
+        assert HARD.split_count_min == 3
+        assert HARD.split_count_max == 4
+
+
+class TestResolveDifficultySplitCount:
+    """Tests for resolve_difficulty returning split_count."""
+
+    def test_easy_returns_split_count_one(self):
+        """resolve_difficulty('easy') returns split_count=1."""
+        result = resolve_difficulty("easy")
+        assert result["split_count"] == 1
+
+    def test_medium_returns_split_count_two(self):
+        """resolve_difficulty('medium') returns split_count=2."""
+        result = resolve_difficulty("medium")
+        assert result["split_count"] == 2
+
+    def test_hard_returns_split_count_in_range(self):
+        """resolve_difficulty('hard') returns split_count in [3, 4]."""
+        for _ in range(20):
+            result = resolve_difficulty("hard")
+            assert 3 <= result["split_count"] <= 4
+
+    def test_none_returns_none_unchanged(self):
+        """resolve_difficulty(None) still returns None."""
+        assert resolve_difficulty(None) is None

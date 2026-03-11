@@ -123,6 +123,20 @@ def save_history_entry(output_dir: Path, entry: dict) -> None:
     logger.info("history_entry_saved", filename=entry.get("filename"))
 
 
+def load_history_by_batch(output_dir: Path, batch_id: str) -> list[dict]:
+    """Load history entries belonging to a specific batch.
+
+    Args:
+        output_dir: Directory containing the history file.
+        batch_id: The batch identifier to filter by.
+
+    Returns:
+        List of history entry dicts where batch_id matches.
+    """
+    history = load_history(output_dir)
+    return [e for e in history if e.get("batch_id") == batch_id]
+
+
 def update_history_push_status(
     output_dir: Path,
     filename: str,

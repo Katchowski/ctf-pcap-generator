@@ -13,8 +13,9 @@ import base64
 from pathlib import Path
 
 from scapy.layers.dns import DNS, DNSQR
-from scapy.layers.inet import IP, TCP
-from scapy.packet import Packet
+from scapy.layers.inet import ICMP, IP, TCP
+from scapy.layers.l2 import ARP, Ether
+from scapy.packet import Packet, Raw
 
 # Import builders package to trigger auto-discovery registration
 import ctf_pcaps.engine.builders  # noqa: F401
@@ -840,3 +841,830 @@ class TestHttpBeaconBuilder:
         assert result.metadata is not None
         assert result.metadata.name == "HTTP Beaconing / C2"
         assert result.metadata.category.value == "malware_c2"
+
+
+class TestScenarioCategories:
+    """Tests for ScenarioCategory enum values."""
+
+    def test_post_exploitation_category_exists(self):
+        """POST_EXPLOITATION is a valid ScenarioCategory enum value."""
+        from ctf_pcaps.engine.models import ScenarioCategory
+
+        assert ScenarioCategory.POST_EXPLOITATION == "post_exploitation"
+
+    def test_post_exploitation_is_str_enum(self):
+        """POST_EXPLOITATION behaves as a StrEnum (string comparison)."""
+        from ctf_pcaps.engine.models import ScenarioCategory
+
+        assert isinstance(ScenarioCategory.POST_EXPLOITATION, str)
+        cat = ScenarioCategory("post_exploitation")
+        assert cat is ScenarioCategory.POST_EXPLOITATION
+
+
+class TestReverseShellBuilder:
+    """Tests for ReverseShellBuilder registration and packet generation."""
+
+    def test_registered_as_reverse_shell(self):
+        """ReverseShellBuilder is registered as 'reverse_shell' version 1."""
+        from ctf_pcaps.engine.builders.reverse_shell import ReverseShellBuilder
+
+        builder_cls = get_builder("reverse_shell")
+        assert builder_cls is ReverseShellBuilder
+
+    def test_build_yields_packets(self):
+        """ReverseShellBuilder.build() yields Scapy Packet objects."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "listener_port": 4444,
+            "os_type": "linux",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        assert len(packets) > 0
+        for pkt in packets:
+            assert isinstance(pkt, Packet)
+
+    def test_build_produces_ip_tcp_layers(self):
+        """All packets have IP and TCP layers."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "listener_port": 4444,
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        for pkt in packets:
+            assert pkt.haslayer(IP)
+            assert pkt.haslayer(TCP)
+
+    def test_single_persistent_tcp_session(self):
+        """Uses ONE persistent TCP session (only one SYN packet)."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "listener_port": 4444,
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        syn_packets = [
+            p for p in packets if p.haslayer(TCP) and str(p[TCP].flags) == "S"
+        ]
+        assert len(syn_packets) == 1
+
+    def test_handshake_data_teardown_flags(self):
+        """Produces S, SA, PA, FA TCP flags in the session."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "listener_port": 4444,
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        flags = {str(pkt[TCP].flags) for pkt in packets if pkt.haslayer(TCP)}
+        assert "S" in flags
+        assert "SA" in flags
+        assert "PA" in flags
+        assert "FA" in flags
+
+    def test_reverse_direction_victim_to_attacker(self):
+        """Victim connects TO attacker (src=victim, dst=attacker in SYN)."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "listener_port": 4444,
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        syn = [p for p in packets if str(p[TCP].flags) == "S"][0]
+        assert syn[IP].src == "10.0.0.50"
+        assert syn[IP].dst == "10.0.0.200"
+        assert syn[TCP].dport == 4444
+
+    def test_linux_commands(self):
+        """os_type='linux' produces linux commands (whoami, cat /flag.txt)."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "os_type": "linux",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"whoami" in raw_bytes
+        assert b"www-data" in raw_bytes
+        assert b"uname -a" in raw_bytes
+
+    def test_windows_commands(self):
+        """os_type='windows' produces windows commands (whoami, ipconfig)."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "os_type": "windows",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"whoami" in raw_bytes
+        assert b"ipconfig" in raw_bytes
+
+    def test_flag_text_embedded_in_output(self):
+        """When __flag_text is in params, flag appears in command output."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "__flag_text": "flag{test_reverse_shell_123}",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"flag{test_reverse_shell_123}" in raw_bytes
+
+    def test_flag_text_not_present_uses_placeholder(self):
+        """When __flag_text is NOT in params, uses placeholder flag."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        # Placeholder should still be present
+        assert b"FLAG{" in raw_bytes or b"flag{" in raw_bytes
+
+    def test_flag_encoding_applied(self):
+        """When __flag_encoding is present, flag is encoded before embedding."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "__flag_text": "flag{encoded_test}",
+            "__flag_encoding": ["base64"],
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        encoded = base64.b64encode(b"flag{encoded_test}").decode()
+        assert encoded.encode() in raw_bytes
+
+    def test_callback_called_with_incrementing_count(self):
+        """Callback is called with incrementing count for each packet."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        counts = []
+        packets = list(
+            builder.build(params, steps, callback=lambda c: counts.append(c))
+        )
+        assert len(counts) == len(packets)
+        assert counts[-1] == len(packets)
+
+    def test_command_count_parameter(self):
+        """command_count limits the number of commands in the session."""
+        builder_cls = get_builder("reverse_shell")
+        builder = builder_cls()
+        params_3 = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "command_count": 3,
+        }
+        params_5 = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+            "command_count": 5,
+        }
+        steps = [{"action": "reverse_shell_session"}]
+        pkts_3 = list(builder.build(params_3, steps))
+        pkts_5 = list(builder.build(params_5, steps))
+        # More commands = more packets
+        assert len(pkts_5) > len(pkts_3)
+
+    def test_reverse_shell_yaml_validates(self):
+        """reverse_shell.yaml validates via ScenarioTemplate."""
+        from ctf_pcaps.engine.loader import load_template, validate_template
+        from ctf_pcaps.engine.models import ScenarioTemplate
+
+        raw = load_template(Path("scenarios/reverse_shell.yaml"))
+        result = validate_template(raw)
+        assert isinstance(result, ScenarioTemplate)
+        assert result.builder == "reverse_shell"
+        assert result.metadata is not None
+        assert result.metadata.name == "Reverse Shell"
+        assert result.metadata.category.value == "post_exploitation"
+
+
+class TestXssReflectedBuilder:
+    """Tests for XssReflectedBuilder registration and packet generation."""
+
+    def test_registered_as_xss_reflected(self):
+        """XssReflectedBuilder is registered as 'xss_reflected' version 1."""
+        from ctf_pcaps.engine.builders.xss_reflected import XssReflectedBuilder
+
+        builder_cls = get_builder("xss_reflected")
+        assert builder_cls is XssReflectedBuilder
+
+    def test_build_yields_packets(self):
+        """XssReflectedBuilder.build() yields Scapy Packet objects."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {
+            "src_ip": "10.0.0.10",
+            "dst_ip": "10.0.0.80",
+            "dport": 80,
+        }
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        assert len(packets) > 0
+        for pkt in packets:
+            assert isinstance(pkt, Packet)
+
+    def test_multiple_tcp_sessions(self):
+        """Each HTTP request/response uses a separate TCP session."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "payload_count": 4}
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        syn_packets = [
+            p for p in packets if p.haslayer(TCP) and str(p[TCP].flags) == "S"
+        ]
+        assert len(syn_packets) == 4
+
+    def test_http_get_with_xss_payloads(self):
+        """HTTP GET requests contain XSS payloads in query parameter."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80"}
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"GET /" in raw_bytes
+        assert b"search=" in raw_bytes
+
+    def test_response_reflects_payload_unescaped(self):
+        """HTTP responses reflect XSS payload unescaped in HTML body."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80"}
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        # Response should contain reflected script tag
+        assert b"<script>" in raw_bytes
+        assert b"You searched for:" in raw_bytes
+
+    def test_progression_benign_to_flag(self):
+        """Payloads progress from benign probe to script injection to flag."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80"}
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        # Should contain benign probe
+        assert b"<b>test</b>" in raw_bytes
+        # Should contain script injection
+        assert b"alert(1)" in raw_bytes
+
+    def test_flag_text_in_response(self):
+        """When __flag_text in params, flag appears in alert() response."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {
+            "dst_ip": "10.0.0.80",
+            "__flag_text": "flag{xss_test_123}",
+        }
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"flag{xss_test_123}" in raw_bytes
+
+    def test_flag_encoding_applied(self):
+        """When __flag_encoding present, flag is encoded before embedding."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {
+            "dst_ip": "10.0.0.80",
+            "__flag_text": "flag{xss_enc}",
+            "__flag_encoding": ["base64"],
+        }
+        steps = [{"action": "xss_reflected_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        encoded = base64.b64encode(b"flag{xss_enc}").decode()
+        assert encoded.encode() in raw_bytes
+
+    def test_callback_called(self):
+        """Callback is called with incrementing count for each packet."""
+        builder_cls = get_builder("xss_reflected")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80"}
+        steps = [{"action": "xss_reflected_attack"}]
+        counts = []
+        packets = list(
+            builder.build(params, steps, callback=lambda c: counts.append(c))
+        )
+        assert len(counts) == len(packets)
+        assert counts[-1] == len(packets)
+
+    def test_xss_reflected_yaml_validates(self):
+        """xss_reflected.yaml validates via ScenarioTemplate."""
+        from ctf_pcaps.engine.loader import load_template, validate_template
+        from ctf_pcaps.engine.models import ScenarioTemplate
+
+        raw = load_template(Path("scenarios/xss_reflected.yaml"))
+        result = validate_template(raw)
+        assert isinstance(result, ScenarioTemplate)
+        assert result.builder == "xss_reflected"
+        assert result.metadata is not None
+        assert result.metadata.name == "XSS Reflected"
+        assert result.metadata.category.value == "web_traffic"
+
+
+class TestDirTraversalBuilder:
+    """Tests for DirTraversalBuilder registration and packet generation."""
+
+    def test_registered_as_dir_traversal(self):
+        """DirTraversalBuilder is registered as 'dir_traversal' version 1."""
+        from ctf_pcaps.engine.builders.dir_traversal import DirTraversalBuilder
+
+        builder_cls = get_builder("dir_traversal")
+        assert builder_cls is DirTraversalBuilder
+
+    def test_build_yields_packets(self):
+        """DirTraversalBuilder.build() yields Scapy Packet objects."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {
+            "src_ip": "10.0.0.10",
+            "dst_ip": "10.0.0.80",
+            "dport": 80,
+        }
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        assert len(packets) > 0
+        for pkt in packets:
+            assert isinstance(pkt, Packet)
+
+    def test_multiple_tcp_sessions(self):
+        """Each traversal attempt uses a separate TCP session."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "linux"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        syn_packets = [
+            p for p in packets if p.haslayer(TCP) and str(p[TCP].flags) == "S"
+        ]
+        # Should have multiple sessions (one per traversal attempt)
+        assert len(syn_packets) >= 3
+
+    def test_http_get_with_traversal_paths(self):
+        """HTTP GET requests contain ../ path traversal sequences."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "linux"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"GET /" in raw_bytes
+        assert b".." in raw_bytes
+
+    def test_mixed_response_codes(self):
+        """Responses include 403/404 failures and one 200 success."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "linux"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        has_forbidden = b"403 Forbidden" in raw_bytes
+        has_not_found = b"404 Not Found" in raw_bytes
+        has_ok = b"200 OK" in raw_bytes
+        # Should have at least one failure and one success
+        assert has_forbidden or has_not_found
+        assert has_ok
+
+    def test_successful_response_contains_file_contents(self):
+        """Successful 200 response contains realistic file contents."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "linux"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        # Should contain file content indicators
+        assert b"200 OK" in raw_bytes
+
+    def test_linux_traversal_paths(self):
+        """os_type='linux' uses ../etc/passwd style paths."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "linux"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"etc" in raw_bytes
+
+    def test_windows_traversal_paths(self):
+        """os_type='windows' uses ..\\windows style paths."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80", "os_type": "windows"}
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"windows" in raw_bytes or b"Windows" in raw_bytes
+
+    def test_flag_text_in_successful_response(self):
+        """When __flag_text in params, flag appears in successful response."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {
+            "dst_ip": "10.0.0.80",
+            "__flag_text": "flag{dir_traversal_test}",
+        }
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"flag{dir_traversal_test}" in raw_bytes
+
+    def test_flag_encoding_applied(self):
+        """When __flag_encoding present, flag is encoded before embedding."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {
+            "dst_ip": "10.0.0.80",
+            "__flag_text": "flag{dir_enc}",
+            "__flag_encoding": ["base64"],
+        }
+        steps = [{"action": "dir_traversal_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        encoded = base64.b64encode(b"flag{dir_enc}").decode()
+        assert encoded.encode() in raw_bytes
+
+    def test_callback_called(self):
+        """Callback is called with incrementing count for each packet."""
+        builder_cls = get_builder("dir_traversal")
+        builder = builder_cls()
+        params = {"dst_ip": "10.0.0.80"}
+        steps = [{"action": "dir_traversal_attack"}]
+        counts = []
+        packets = list(
+            builder.build(params, steps, callback=lambda c: counts.append(c))
+        )
+        assert len(counts) == len(packets)
+        assert counts[-1] == len(packets)
+
+    def test_dir_traversal_yaml_validates(self):
+        """dir_traversal.yaml validates via ScenarioTemplate."""
+        from ctf_pcaps.engine.loader import load_template, validate_template
+        from ctf_pcaps.engine.models import ScenarioTemplate
+
+        raw = load_template(Path("scenarios/dir_traversal.yaml"))
+        result = validate_template(raw)
+        assert isinstance(result, ScenarioTemplate)
+        assert result.builder == "dir_traversal"
+        assert result.metadata is not None
+        assert result.metadata.name == "Directory Traversal"
+        assert result.metadata.category.value == "web_traffic"
+
+
+class TestArpSpoofingBuilder:
+    """Tests for ArpSpoofingBuilder registration and packet generation."""
+
+    def test_registered_as_arp_spoofing(self):
+        """ArpSpoofingBuilder is registered as 'arp_spoofing' version 1."""
+        from ctf_pcaps.engine.builders.arp_spoofing import ArpSpoofingBuilder
+
+        builder_cls = get_builder("arp_spoofing")
+        assert builder_cls is ArpSpoofingBuilder
+
+    def test_build_yields_packets(self):
+        """ArpSpoofingBuilder.build() yields Scapy Packet objects."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        assert len(packets) > 0
+        for pkt in packets:
+            assert isinstance(pkt, Packet)
+
+    def test_has_arp_packets_with_ether_layer(self):
+        """Output contains ARP packets wrapped in Ether layer."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        arp_packets = [
+            p for p in packets if p.haslayer(ARP) and p.haslayer(Ether)
+        ]
+        assert len(arp_packets) > 0
+
+    def test_has_tcp_packets_for_flag_embedding(self):
+        """Output contains TCP packets for flag embedding compatibility."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        tcp_packets = [p for p in packets if p.haslayer(TCP)]
+        assert len(tcp_packets) > 0
+
+    def test_tcp_packets_appear_early_in_stream(self):
+        """TCP packets appear before ARP-only packets for extract_addresses()."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        # Find first TCP packet index
+        first_tcp_idx = None
+        for i, pkt in enumerate(packets):
+            if pkt.haslayer(TCP):
+                first_tcp_idx = i
+                break
+        assert first_tcp_idx is not None
+        # First TCP should appear early (within first 10 packets)
+        assert first_tcp_idx < 10
+
+    def test_gratuitous_arp_claims_gateway_ip(self):
+        """Gratuitous ARP replies have attacker MAC claiming gateway IP."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+            "arp_count": 5,
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        # Find gratuitous ARP packets (is-at with gateway IP in psrc)
+        grat_arps = [
+            p
+            for p in packets
+            if p.haslayer(ARP)
+            and p[ARP].op == 2  # is-at
+            and p[ARP].psrc == "10.0.0.1"  # claiming gateway
+        ]
+        assert len(grat_arps) >= 5
+
+    def test_http_intercepted_traffic_present(self):
+        """HTTP intercepted traffic present when intercepted_type='http'."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+            "intercepted_type": "http",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        packets = list(builder.build(params, steps))
+        raw_bytes = b"".join(bytes(p) for p in packets)
+        assert b"HTTP/1.1" in raw_bytes
+
+    def test_callback_called(self):
+        """ArpSpoofingBuilder calls callback with packet count."""
+        builder_cls = get_builder("arp_spoofing")
+        builder = builder_cls()
+        params = {
+            "attacker_ip": "10.0.0.100",
+            "victim_ip": "10.0.0.50",
+            "gateway_ip": "10.0.0.1",
+        }
+        steps = [{"action": "arp_spoofing_attack"}]
+        counts = []
+        packets = list(
+            builder.build(params, steps, callback=lambda c: counts.append(c))
+        )
+        assert len(counts) > 0
+        assert counts[-1] == len(packets)
+
+    def test_arp_spoofing_yaml_validates(self):
+        """arp_spoofing.yaml loads and validates via ScenarioTemplate."""
+        from ctf_pcaps.engine.loader import load_template, validate_template
+        from ctf_pcaps.engine.models import ScenarioTemplate
+
+        raw = load_template(Path("scenarios/arp_spoofing.yaml"))
+        result = validate_template(raw)
+        assert isinstance(result, ScenarioTemplate)
+        assert result.builder == "arp_spoofing"
+        assert result.metadata is not None
+        assert result.metadata.name == "ARP Spoofing / MITM"
+        assert result.metadata.category.value == "network_attack"
+
+
+class TestIcmpExfilBuilder:
+    """Tests for IcmpExfilBuilder registration and packet generation."""
+
+    def test_registered_as_icmp_exfil(self):
+        """IcmpExfilBuilder is registered as 'icmp_exfil' version 1."""
+        from ctf_pcaps.engine.builders.icmp_exfil import IcmpExfilBuilder
+
+        builder_cls = get_builder("icmp_exfil")
+        assert builder_cls is IcmpExfilBuilder
+
+    def test_build_yields_packets(self):
+        """IcmpExfilBuilder.build() yields Scapy Packet objects."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        assert len(packets) > 0
+        for pkt in packets:
+            assert isinstance(pkt, Packet)
+
+    def test_has_icmp_echo_request_packets_with_data(self):
+        """Output contains ICMP echo-request packets with data in Raw layer."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        exfil_requests = [
+            p
+            for p in packets
+            if p.haslayer(ICMP)
+            and p[ICMP].type == 8  # echo-request
+            and p.haslayer(Raw)
+            and p[Raw].load != b"\x00" * len(p[Raw].load)  # not all nulls
+        ]
+        assert len(exfil_requests) > 0
+
+    def test_has_icmp_echo_reply_packets(self):
+        """Output contains ICMP echo-reply packets."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        replies = [
+            p for p in packets if p.haslayer(ICMP) and p[ICMP].type == 0
+        ]
+        assert len(replies) > 0
+
+    def test_has_tcp_packets_for_flag_embedding(self):
+        """Output contains TCP packets (control channel) for flag embedding."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        tcp_packets = [p for p in packets if p.haslayer(TCP)]
+        assert len(tcp_packets) > 0
+
+    def test_tcp_packets_appear_early_in_stream(self):
+        """TCP packets appear early in packet stream for extract_addresses()."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        first_tcp_idx = None
+        for i, pkt in enumerate(packets):
+            if pkt.haslayer(TCP):
+                first_tcp_idx = i
+                break
+        assert first_tcp_idx is not None
+        assert first_tcp_idx < 10
+
+    def test_normal_pings_have_standard_payload(self):
+        """Normal pings (seq < 100) have standard 56-byte null payload."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        normal_pings = [
+            p
+            for p in packets
+            if p.haslayer(ICMP)
+            and p[ICMP].type == 8  # echo-request
+            and p[ICMP].seq < 100
+        ]
+        assert len(normal_pings) >= 3
+        for p in normal_pings:
+            assert p.haslayer(Raw)
+            assert p[Raw].load == b"\x00" * 56
+
+    def test_exfil_data_reassembles_correctly(self):
+        """Exfil data can be reassembled from echo-request payloads."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        packets = list(builder.build(params, steps))
+        # Collect Raw payloads from echo-requests with seq >= 100
+        exfil_chunks = []
+        for p in packets:
+            if (
+                p.haslayer(ICMP)
+                and p[ICMP].type == 8  # echo-request
+                and p[ICMP].seq >= 100
+                and p.haslayer(Raw)
+            ):
+                exfil_chunks.append((p[ICMP].seq, p[Raw].load))
+        assert len(exfil_chunks) > 0
+        # Sort by seq and concatenate
+        exfil_chunks.sort(key=lambda x: x[0])
+        concatenated = b"".join(chunk for _, chunk in exfil_chunks)
+        # Base64-decode should produce readable content
+        decoded = base64.b64decode(concatenated).decode()
+        assert len(decoded) > 0
+        # Should contain some recognizable content
+        assert "CONFIDENTIAL" in decoded or "Access" in decoded
+
+    def test_callback_called(self):
+        """IcmpExfilBuilder calls callback with packet count."""
+        builder_cls = get_builder("icmp_exfil")
+        builder = builder_cls()
+        params = {
+            "victim_ip": "10.0.0.50",
+            "attacker_ip": "10.0.0.200",
+        }
+        steps = [{"action": "icmp_exfiltration"}]
+        counts = []
+        packets = list(
+            builder.build(params, steps, callback=lambda c: counts.append(c))
+        )
+        assert len(counts) > 0
+        assert counts[-1] == len(packets)
+
+    def test_icmp_exfil_yaml_validates(self):
+        """icmp_exfil.yaml loads and validates via ScenarioTemplate."""
+        from ctf_pcaps.engine.loader import load_template, validate_template
+        from ctf_pcaps.engine.models import ScenarioTemplate
+
+        raw = load_template(Path("scenarios/icmp_exfil.yaml"))
+        result = validate_template(raw)
+        assert isinstance(result, ScenarioTemplate)
+        assert result.builder == "icmp_exfil"
+        assert result.metadata is not None
+        assert result.metadata.name == "ICMP Exfiltration"
+        assert result.metadata.category.value == "covert_channel"

@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+{% block title %}Batch Generate - CTF PCAP Generator{% endblock %}
+{% block content %}
+<nav aria-label="breadcrumb">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/scenarios">Scenarios</a></li>
+    <li class="breadcrumb-item active">Batch Generate</li>
+  </ol>
+</nav>
+
+<h1>Batch Generate</h1>
+<p class="text-muted">Select multiple scenarios to generate an entire competition's worth of challenges in one operation.</p>
+
+<div id="batch-form-area">
+  <h4>Select Scenarios</h4>
+  <div class="mb-3">
+    <button type="button" class="btn btn-sm btn-outline-primary me-2" id="select-all-btn" onclick="toggleAll(true)">Select All</button>
+    <button type="button" class="btn btn-sm btn-outline-secondary" id="clear-all-btn" onclick="toggleAll(false)">Clear All</button>
+    <span class="ms-3 text-muted" id="selected-count">0 scenarios selected</span>
+  </div>
+
+  <div class="row" id="scenario-grid">
+    {% for scenario in scenarios %}
+    <div class="col-md-4 mb-3">
+      <div class="card scenario-check-card">
+        <div class="card-body">
+          <div class="form-check">
+            <input class="form-check-input scenario-checkbox" type="checkbox"
+                   value="{{ scenario.slug }}" id="check_{{ scenario.slug }}"
+                   onchange="updateSelectedCount(); toggleAccordionItem('{{ scenario.slug }}', this.checked)">
+            <label class="form-check-label fw-bold" for="check_{{ scenario.slug }}">
+              {{ scenario.name }}
+            </label>
+          </div>
+          <span class="badge bg-info mt-1">{{ scenario.category_label }}</span>
+          <p class="card-text text-muted small mt-1 mb-0">{{ scenario.description[:80] }}{% if scenario.description|length > 80 %}...{% endif %}</p>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <h4 class="mt-4">Shared Parameters</h4>
+  <div class="row">
+    <div class="col-md-4 mb-3">
+      <label for="batch_flag_format" class="form-label">Flag Format</label>
+      <select class="form-select" name="flag_format" id="batch_flag_format">
+        <option value="flag">flag{...}</option>
+        <option value="CTF">CTF{...}</option>
+        <option value="ctf">ctf{...}</option>
+      </select>
+    </div>
+    <div class="col-md-4 mb-3">
+      <label for="batch_difficulty" class="form-label">Difficulty Preset</label>
+      <select class="form-select" name="difficulty" id="batch_difficulty">
+        <option value="">None</option>
+        <option value="easy">Easy</option>
+        <option value="medium">Medium</option>
+        <option value="hard">Hard</option>
+      </select>
+    </div>
+  </div>
+
+  <h4 class="mt-4">Per-Scenario Overrides</h4>
+  <p class="text-muted small">Expand a scenario panel to override its individual parameters. Only visible for selected scenarios.</p>
+  <div class="accordion" id="scenarioAccordion">
+    {% for scenario in scenarios %}
+    <div class="accordion-item d-none" id="accordion-item-{{ scenario.slug }}">
+      <h2 class="accordion-header" id="heading-{{ scenario.slug }}">
+        <button class="accordion-button collapsed" type="button"
+                data-bs-toggle="collapse" data-bs-target="#collapse-{{ scenario.slug }}"
+                aria-expanded="false" aria-controls="collapse-{{ scenario.slug }}">
+          {{ scenario.name }} - Parameter Overrides
+        </button>
+      </h2>
+      <div id="collapse-{{ scenario.slug }}" class="accordion-collapse collapse"
+           aria-labelledby="heading-{{ scenario.slug }}" data-bs-parent="#scenarioAccordion">
+        <div class="accordion-body">
+          {% if scenario.parameters %}
+          {% for name, param in scenario.parameters.items() %}
+          <div class="mb-3">
+            <label for="override_{{ scenario.slug }}__{{ name }}" class="form-label">{{ name }}</label>
+            {% if param.choices %}
+            <select class="form-select override-field" name="{{ scenario.slug }}__{{ name }}"
+                    id="override_{{ scenario.slug }}__{{ name }}" data-slug="{{ scenario.slug }}">
+              <option value="">Use default</option>
+              {% for choice in param.choices %}
+              <option value="{{ choice }}">{{ choice }}</option>
+              {% endfor %}
+            </select>
+            {% elif param.default is number %}
+            <input type="number" class="form-control override-field"
+                   name="{{ scenario.slug }}__{{ name }}"
+                   id="override_{{ scenario.slug }}__{{ name }}"
+                   placeholder="{{ param.default }}"
+                   data-slug="{{ scenario.slug }}"
+                   {% if param.min is not none %} min="{{ param.min }}"{% endif %}
+                   {% if param.max is not none %} max="{{ param.max }}"{% endif %}>
+            {% else %}
+            <input type="text" class="form-control override-field"
+                   name="{{ scenario.slug }}__{{ name }}"
+                   id="override_{{ scenario.slug }}__{{ name }}"
+                   placeholder="{{ param.default }}"
+                   data-slug="{{ scenario.slug }}">
+            {% endif %}
+            {% if param.description %}
+            <div class="form-text">{{ param.description }}</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+          {% else %}
+          <p class="text-muted">No configurable parameters for this scenario.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <button type="button" class="btn btn-primary btn-lg mt-4" id="batch-generate-btn" onclick="startBatchGeneration()">Generate Batch</button>
+</div>
+
+<div id="batch-sse-container"></div>
+<div id="batch-progress-area"></div>
+<div id="batch-result-area"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function updateSelectedCount() {
+    var checked = document.querySelectorAll('.scenario-checkbox:checked').length;
+    document.getElementById('selected-count').textContent = checked + ' scenarios selected';
+}
+
+function toggleAll(state) {
+    document.querySelectorAll('.scenario-checkbox').forEach(function(cb) {
+        cb.checked = state;
+        toggleAccordionItem(cb.value, state);
+    });
+    updateSelectedCount();
+}
+
+function toggleAccordionItem(slug, visible) {
+    var item = document.getElementById('accordion-item-' + slug);
+    if (item) {
+        if (visible) {
+            item.classList.remove('d-none');
+        } else {
+            item.classList.add('d-none');
+        }
+    }
+}
+
+function startBatchGeneration() {
+    var params = new URLSearchParams();
+    var checked = document.querySelectorAll('.scenario-checkbox:checked');
+    if (checked.length === 0) {
+        alert('Please select at least one scenario.');
+        return;
+    }
+
+    checked.forEach(function(cb) {
+        params.append('scenarios', cb.value);
+    });
+
+    var flagFormat = document.getElementById('batch_flag_format').value;
+    params.set('flag_format', flagFormat);
+
+    var difficulty = document.getElementById('batch_difficulty').value;
+    if (difficulty) {
+        params.set('difficulty', difficulty);
+    }
+
+    // Collect per-scenario override values
+    document.querySelectorAll('.override-field').forEach(function(field) {
+        if (field.value && field.value !== '') {
+            params.set(field.name, field.value);
+        }
+    });
+
+    // Hide form, show SSE connection
+    document.getElementById('batch-form-area').style.display = 'none';
+
+    var sseUrl = '/batch/stream?' + params.toString();
+    var container = document.getElementById('batch-sse-container');
+    container.innerHTML = '<div hx-ext="sse" sse-connect="' + sseUrl + '" sse-close="batch-complete">' +
+        '<div sse-swap="batch-progress" hx-target="#batch-progress-area" hx-swap="innerHTML"></div>' +
+        '<div sse-swap="batch-complete" hx-target="#batch-result-area" hx-swap="innerHTML"></div>' +
+        '</div>';
+    htmx.process(container);
+}
+</script>
+{% endblock %}

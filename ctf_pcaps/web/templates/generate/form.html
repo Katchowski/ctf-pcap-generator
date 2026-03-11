@@ -33,6 +33,16 @@
         <option value="ctf">ctf{...}</option>
       </select>
     </div>
+    <div class="mb-3" id="split-count-field">
+      <label for="split_count" class="form-label">Split Flag Into Parts</label>
+      <select class="form-select" name="split_count" id="split_count">
+        <option value="1" selected>1 (no splitting)</option>
+        <option value="2">2 parts</option>
+        <option value="3">3 parts</option>
+        <option value="4">4 parts</option>
+      </select>
+      <div class="form-text">Split the flag across multiple packets requiring reassembly to solve</div>
+    </div>
   </div>
 
   <h4 class="mt-4">Difficulty</h4>
@@ -94,6 +104,14 @@
 
 {% block extra_js %}
 <script>
+document.querySelectorAll('input[name="difficulty"]').forEach(function(radio) {
+    radio.addEventListener('change', function() {
+        var splitField = document.getElementById('split-count-field');
+        if (splitField) {
+            splitField.style.display = this.value === 'none' ? 'block' : 'none';
+        }
+    });
+});
 function startGeneration() {
     var params = new URLSearchParams();
     var embedFlag = document.getElementById('embed_flag');
@@ -106,6 +124,12 @@ function startGeneration() {
     var diffRadio = document.querySelector('input[name="difficulty"]:checked');
     if (diffRadio && diffRadio.value !== 'none') {
         params.set('difficulty', diffRadio.value);
+    }
+    if (!diffRadio || diffRadio.value === 'none') {
+        var splitSelect = document.getElementById('split_count');
+        if (splitSelect && splitSelect.value !== '1') {
+            params.set('split_count', splitSelect.value);
+        }
     }
     {% for name, param in scenario.parameters.items() %}
     var el = document.querySelector('[name="param_{{ name }}"]');

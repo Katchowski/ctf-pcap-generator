@@ -22,17 +22,21 @@ from ctf_pcaps.engine.difficulty import HARD_ENCODING_CHAINS
 from ctf_pcaps.engine.flag import (
     ENCODERS,
     _build_solve_steps_chain,
+    _build_solve_steps_split,
     assemble_flag,
     build_flag_packet,
     build_flag_payload,
     decode_flag,
     decode_flag_chain,
     embed_flag_packet,
+    embed_split_flag_packets,
     encode_flag,
     encode_flag_chain,
     extract_addresses,
     extract_printable_strings,
+    split_encoded_string,
     verify_flag_in_pcap,
+    verify_split_flag_in_pcap,
     verify_stealth,
 )
 
@@ -316,17 +320,10 @@ class TestVerifyFlagInPcap:
         """Helper: create a PCAP with a flag packet and return path."""
         encoded = encode_flag(flag_text, encoding)
         _, decode_fn = ENCODERS[encoding]
-        payload = build_flag_payload(
-            encoded, "10.0.0.1", "10.0.0.2", "test_session"
-        )
-        flag_pkt = build_flag_packet(
-            "tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload
-        )
+        payload = build_flag_payload(encoded, "10.0.0.1", "10.0.0.2", "test_session")
+        flag_pkt = build_flag_packet("tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload)
         # Some filler packets
-        filler = [
-            IP(src="10.0.0.1", dst="10.0.0.2") / TCP()
-            for _ in range(5)
-        ]
+        filler = [IP(src="10.0.0.1", dst="10.0.0.2") / TCP() for _ in range(5)]
         all_packets = filler[:3] + [flag_pkt] + filler[3:]
 
         fd, path = tempfile.mkstemp(suffix=".pcap")
@@ -354,18 +351,13 @@ class TestVerifyFlagInPcap:
 
     def test_returns_false_when_flag_absent(self):
         """PCAP with no flag packet should return verified=False."""
-        packets = [
-            IP(src="10.0.0.1", dst="10.0.0.2") / TCP()
-            for _ in range(5)
-        ]
+        packets = [IP(src="10.0.0.1", dst="10.0.0.2") / TCP() for _ in range(5)]
         fd, path = tempfile.mkstemp(suffix=".pcap")
         os.close(fd)
         wrpcap(path, packets)
         try:
             _, decode_fn = ENCODERS["plaintext"]
-            result = verify_flag_in_pcap(
-                path, "flag{missing}", "plaintext", decode_fn
-            )
+            result = verify_flag_in_pcap(path, "flag{missing}", "plaintext", decode_fn)
             assert result["verified"] is False
             assert result["packet_index"] is None
             assert result["solve_steps"] == []
@@ -433,12 +425,8 @@ class TestVerifyStealth:
     def test_plaintext_always_passes(self):
         """Plaintext encoding always passes stealth."""
         flag_text = "flag{test}"
-        payload = build_flag_payload(
-            flag_text, "10.0.0.1", "10.0.0.2", "sid"
-        )
-        pkt = build_flag_packet(
-            "tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload
-        )
+        payload = build_flag_payload(flag_text, "10.0.0.1", "10.0.0.2", "sid")
+        pkt = build_flag_packet("tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload)
         fd, path = tempfile.mkstemp(suffix=".pcap")
         os.close(fd)
         wrpcap(path, [pkt])
@@ -451,12 +439,8 @@ class TestVerifyStealth:
         """Base64 flag should pass stealth when literal is absent."""
         flag_text = "flag{secret_data}"
         encoded = encode_flag(flag_text, "base64")
-        payload = build_flag_payload(
-            encoded, "10.0.0.1", "10.0.0.2", "sid"
-        )
-        pkt = build_flag_packet(
-            "tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload
-        )
+        payload = build_flag_payload(encoded, "10.0.0.1", "10.0.0.2", "sid")
+        pkt = build_flag_packet("tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload)
         fd, path = tempfile.mkstemp(suffix=".pcap")
         os.close(fd)
         wrpcap(path, [pkt])
@@ -470,9 +454,7 @@ class TestVerifyStealth:
         flag_text = "flag{test}"
         # Literal flag text as raw payload (simulating encoding bug)
         payload = flag_text.encode()
-        pkt = build_flag_packet(
-            "tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload
-        )
+        pkt = build_flag_packet("tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload)
         fd, path = tempfile.mkstemp(suffix=".pcap")
         os.close(fd)
         wrpcap(path, [pkt])
@@ -621,3 +603,281 @@ class TestBuildSolveStepsChain:
         # Final: 1 step
         # Total >= 7
         assert len(steps) >= 7
+
+
+# ---------------------------------------------------------------------------
+# Flag Splitting (FLAG-01 / Phase 10)
+# ---------------------------------------------------------------------------
+
+
+class TestSplitEncodedString:
+    """Tests for split_encoded_string function."""
+
+    def test_three_way_split_with_remainder(self):
+        """First chunk gets remainder when length not evenly divisible."""
+        result = split_encoded_string("ABCDEFGHIJ", 3)
+        assert result == ["ABCD", "EFG", "HIJ"]
+
+    def test_even_split(self):
+        """Even split produces equal-length chunks."""
+        result = split_encoded_string("ABCDEF", 2)
+        assert result == ["ABC", "DEF"]
+
+    def test_no_split(self):
+        """split_count=1 returns the whole string as a single-element list."""
+        result = split_encoded_string("ABCDEF", 1)
+        assert result == ["ABCDEF"]
+
+    def test_split_count_exceeds_length_raises(self):
+        """Raises ValueError when split_count > len(encoded)."""
+        with pytest.raises(ValueError, match="split_count"):
+            split_encoded_string("AB", 3)
+
+    def test_split_count_zero_raises(self):
+        """Raises ValueError when split_count < 1."""
+        with pytest.raises(ValueError, match="split_count"):
+            split_encoded_string("AB", 0)
+
+    def test_split_count_negative_raises(self):
+        """Raises ValueError when split_count is negative."""
+        with pytest.raises(ValueError, match="split_count"):
+            split_encoded_string("ABCDEF", -1)
+
+    def test_all_chunks_concatenate_to_original(self):
+        """Concatenating all chunks should produce the original string."""
+        original = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        for n in range(1, 6):
+            chunks = split_encoded_string(original, n)
+            assert "".join(chunks) == original
+
+
+class TestBuildFlagPayloadSplit:
+    """Tests for build_flag_payload with optional part/total parameters."""
+
+    def test_no_part_total_backward_compatible(self):
+        """Without part/total, JSON has no part/total keys."""
+        result = build_flag_payload("encoded", "1.1.1.1", "2.2.2.2", "sid")
+        data = json.loads(result.decode())
+        assert "part" not in data
+        assert "total" not in data
+        assert data["data"] == "encoded"
+
+    def test_with_part_total_includes_keys(self):
+        """With part and total, JSON includes both keys."""
+        result = build_flag_payload(
+            "chunk1", "1.1.1.1", "2.2.2.2", "sid", part=1, total=3
+        )
+        data = json.loads(result.decode())
+        assert data["part"] == 1
+        assert data["total"] == 3
+        assert data["data"] == "chunk1"
+
+    def test_part_only_does_not_include(self):
+        """With only part (no total), neither key is included."""
+        result = build_flag_payload("data", "1.1.1.1", "2.2.2.2", "sid", part=1)
+        data = json.loads(result.decode())
+        assert "part" not in data
+        assert "total" not in data
+
+    def test_total_only_does_not_include(self):
+        """With only total (no part), neither key is included."""
+        result = build_flag_payload("data", "1.1.1.1", "2.2.2.2", "sid", total=3)
+        data = json.loads(result.decode())
+        assert "part" not in data
+        assert "total" not in data
+
+
+class TestEmbedSplitFlagPackets:
+    """Tests for embed_split_flag_packets function."""
+
+    def test_output_length_equals_input_plus_n(self):
+        """Output should contain input packets plus N fragment packets."""
+        packets = [IP() / TCP() for _ in range(10)]
+        fragments = [IP() / TCP() / Raw(load=f"FRAG_{i}".encode()) for i in range(3)]
+        result = list(embed_split_flag_packets(iter(packets), fragments))
+        assert len(result) == 13  # 10 + 3
+
+    def test_all_fragments_present_in_output(self):
+        """All fragment packets should appear in the output."""
+        packets = [IP() / TCP() for _ in range(10)]
+        fragments = [IP() / TCP() / Raw(load=f"FRAG_{i}".encode()) for i in range(3)]
+        result = list(embed_split_flag_packets(iter(packets), fragments))
+        found = set()
+        for pkt in result:
+            if pkt.haslayer(Raw):
+                load = pkt[Raw].load
+                if load.startswith(b"FRAG_"):
+                    found.add(load)
+        assert len(found) == 3
+
+    def test_single_fragment(self):
+        """Single fragment should work like embed_flag_packet."""
+        packets = [IP() / TCP() for _ in range(10)]
+        fragment = IP() / TCP() / Raw(load=b"SINGLE_FRAG")
+        result = list(embed_split_flag_packets(iter(packets), [fragment]))
+        assert len(result) == 11
+
+
+class TestVerifySplitFlagInPcap:
+    """Tests for verify_split_flag_in_pcap function."""
+
+    def _write_split_pcap(self, flag_text, encoding_chain, split_count):
+        """Helper: create PCAP with split flag fragments and return path."""
+        encoded = encode_flag_chain(flag_text, encoding_chain)
+        chunks = split_encoded_string(encoded, split_count)
+
+        session_id = "test_split_session"
+        fragment_packets = []
+        for i, chunk in enumerate(chunks, start=1):
+            payload = build_flag_payload(
+                chunk,
+                "10.0.0.1",
+                "10.0.0.2",
+                session_id,
+                part=i,
+                total=split_count,
+            )
+            pkt = build_flag_packet("tcp", "10.0.0.1", "10.0.0.2", 12345, 80, payload)
+            fragment_packets.append(pkt)
+
+        # Add filler packets
+        filler = [IP(src="10.0.0.1", dst="10.0.0.2") / TCP() for _ in range(10)]
+        # Scatter fragments among filler
+        all_packets = list(embed_split_flag_packets(iter(filler), fragment_packets))
+
+        fd, path = tempfile.mkstemp(suffix=".pcap")
+        os.close(fd)
+        wrpcap(path, all_packets)
+        return path, session_id
+
+    def test_verify_split_flag_succeeds(self):
+        """Reassembled split flag should verify against expected flag."""
+        flag_text = "flag{split_test_value}"
+        path, _ = self._write_split_pcap(flag_text, ["base64"], 3)
+        try:
+            result = verify_split_flag_in_pcap(
+                path,
+                flag_text,
+                ["base64"],
+                lambda x: decode_flag_chain(x, ["base64"]),
+                expected_total=3,
+            )
+            assert result["verified"] is True
+            assert len(result["packet_indices"]) == 3
+            assert result["session_id"] is not None
+            assert len(result["solve_steps"]) > 0
+        finally:
+            os.unlink(path)
+
+    def test_verify_split_flag_wrong_flag_fails(self):
+        """Verification with wrong expected flag returns verified=False."""
+        flag_text = "flag{split_test_value}"
+        path, _ = self._write_split_pcap(flag_text, ["base64"], 2)
+        try:
+            result = verify_split_flag_in_pcap(
+                path,
+                "flag{wrong_value}",
+                ["base64"],
+                lambda x: decode_flag_chain(x, ["base64"]),
+                expected_total=2,
+            )
+            assert result["verified"] is False
+            assert result["packet_indices"] == []
+        finally:
+            os.unlink(path)
+
+    def test_verify_split_flag_missing_fragment_fails(self):
+        """Verification fails when expected_total does not match fragment count."""
+        flag_text = "flag{split_test_value}"
+        path, _ = self._write_split_pcap(flag_text, ["base64"], 2)
+        try:
+            # Expect 3 fragments but only 2 exist
+            result = verify_split_flag_in_pcap(
+                path,
+                flag_text,
+                ["base64"],
+                lambda x: decode_flag_chain(x, ["base64"]),
+                expected_total=3,
+            )
+            assert result["verified"] is False
+        finally:
+            os.unlink(path)
+
+    def test_verify_split_with_chained_encoding(self):
+        """Split verification works with multi-step encoding chains."""
+        flag_text = "flag{chained_split}"
+        chain = ["base64", "hex"]
+        path, _ = self._write_split_pcap(flag_text, chain, 3)
+        try:
+            result = verify_split_flag_in_pcap(
+                path,
+                flag_text,
+                chain,
+                lambda x: decode_flag_chain(x, chain),
+                expected_total=3,
+            )
+            assert result["verified"] is True
+            assert len(result["packet_indices"]) == 3
+        finally:
+            os.unlink(path)
+
+
+class TestBuildSolveStepsSplit:
+    """Tests for _build_solve_steps_split function."""
+
+    def test_mentions_fragment_count(self):
+        """Solve steps should mention the number of fragments."""
+        steps = _build_solve_steps_split(
+            fragment_indices=[3, 7, 12],
+            encoding_chain=["base64"],
+            session_id="abc123",
+            split_count=3,
+        )
+        steps_text = " ".join(steps)
+        assert "3" in steps_text
+
+    def test_mentions_session_id(self):
+        """Solve steps should mention the session_id."""
+        steps = _build_solve_steps_split(
+            fragment_indices=[3, 7],
+            encoding_chain=["base64"],
+            session_id="abc123",
+            split_count=2,
+        )
+        steps_text = " ".join(steps)
+        assert "abc123" in steps_text
+
+    def test_includes_decode_steps_in_reverse(self):
+        """Decode steps should be in reverse order of encoding chain."""
+        steps = _build_solve_steps_split(
+            fragment_indices=[3, 7, 12],
+            encoding_chain=["base64", "hex"],
+            session_id="abc123",
+            split_count=3,
+        )
+        steps_text = " ".join(steps).lower()
+        hex_pos = steps_text.find("hex")
+        base64_pos = steps_text.find("base64")
+        assert hex_pos < base64_pos
+
+    def test_final_step_mentions_flag(self):
+        """Final step should mention the flag."""
+        steps = _build_solve_steps_split(
+            fragment_indices=[3],
+            encoding_chain=["base64"],
+            session_id="abc",
+            split_count=1,
+        )
+        assert "flag" in steps[-1].lower()
+
+    def test_includes_sort_and_concatenate(self):
+        """Steps should mention sorting by part and concatenating."""
+        steps = _build_solve_steps_split(
+            fragment_indices=[3, 7],
+            encoding_chain=["base64"],
+            session_id="abc",
+            split_count=2,
+        )
+        steps_text = " ".join(steps).lower()
+        assert "sort" in steps_text
+        assert "concatenat" in steps_text

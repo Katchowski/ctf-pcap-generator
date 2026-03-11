@@ -1,0 +1,36 @@
+builder: dir_traversal
+protocol: tcp
+metadata:
+  name: "Directory Traversal"
+  description: "Path traversal attack with multiple ../ attempts showing 404/403 failures and successful file content leaks"
+  category: "web_traffic"
+  difficulty_hint: "medium"
+parameters:
+  src_ip:
+    default: "10.0.0.10"
+    description: "Attacker IP address"
+  dst_ip:
+    default: "10.0.0.80"
+    description: "Target web server IP"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Target web server port"
+  target_host:
+    default: "files.example.com"
+    description: "HTTP Host header value"
+  base_path:
+    default: "/download"
+    description: "URL base path before traversal sequence"
+  os_type:
+    default: "linux"
+    choices: ["linux", "windows"]
+    description: "Target OS for file paths and traversal style"
+  traversal_depth:
+    default: 5
+    min: 3
+    max: 8
+    description: "Number of traversal attempts to generate"
+steps:
+  - action: dir_traversal_attack

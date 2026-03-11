@@ -549,6 +549,103 @@ def test_push_api_connection_error(
     assert b"Cannot reach" in response.data
 
 
+# --- Plan 10-02: Split count UI tests ---
+
+
+def test_generate_form_contains_split_count(client):
+    """GET /generate/syn_scan contains split_count dropdown."""
+    response = client.get("/generate/syn_scan")
+    assert response.status_code == 200
+    assert b"split_count" in response.data
+    assert b"Split Flag Into Parts" in response.data
+
+
+def test_difficulty_info_shows_split_count(client):
+    """GET /api/difficulty/medium shows split count in info."""
+    response = client.get("/api/difficulty/medium")
+    assert response.status_code == 200
+    assert b"Flag split:" in response.data
+    assert b"2 parts" in response.data
+
+
+def test_difficulty_info_hard_shows_split_range(client):
+    """GET /api/difficulty/hard shows split count range 3-4."""
+    response = client.get("/api/difficulty/hard")
+    assert response.status_code == 200
+    assert b"Flag split:" in response.data
+    assert b"3-4 parts" in response.data
+
+
+def test_difficulty_info_easy_shows_1_part(client):
+    """GET /api/difficulty/easy shows 1 part (no splitting)."""
+    response = client.get("/api/difficulty/easy")
+    assert response.status_code == 200
+    assert b"Flag split:" in response.data
+    assert b"1 parts" in response.data
+
+
+def test_generate_stream_accepts_split_count(client):
+    """GET /generate/syn_scan/stream?split_count=2 returns SSE without error."""
+    response = client.get("/generate/syn_scan/stream?flag_text=test&split_count=2")
+    assert response.status_code == 200
+    assert "text/event-stream" in response.content_type
+
+
+# --- Plan 11-02: Writeup download route tests ---
+
+
+def test_download_writeup_valid(client, tmp_path):
+    """GET /download/writeup/valid_writeup.md returns 200 when file exists."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "valid_writeup.md").write_text("# Writeup", encoding="utf-8")
+
+        response = client.get("/download/writeup/valid_writeup.md")
+
+    assert response.status_code == 200
+    assert b"# Writeup" in response.data
+
+
+def test_download_writeup_wrong_extension(client):
+    """GET /download/writeup/invalid.txt returns 404 (wrong extension)."""
+    response = client.get("/download/writeup/invalid.txt")
+    assert response.status_code == 404
+
+
+def test_download_writeup_nonexistent(client, tmp_path):
+    """GET /download/writeup/nonexistent.md returns 404 (file missing)."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+
+        response = client.get("/download/writeup/nonexistent.md")
+
+    assert response.status_code == 404
+
+
+def test_download_player_valid(client, tmp_path):
+    """GET /download/player/valid_player.md returns 200 when file exists."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "valid_player.md").write_text("# Player", encoding="utf-8")
+
+        response = client.get("/download/player/valid_player.md")
+
+    assert response.status_code == 200
+    assert b"# Player" in response.data
+
+
+def test_download_player_wrong_extension(client):
+    """GET /download/player/invalid.pcap returns 404 (wrong extension)."""
+    response = client.get("/download/player/invalid.pcap")
+    assert response.status_code == 404
+
+
 @patch("ctf_pcaps.web.routes.load_ctfd_config")
 def test_push_api_file_missing(mock_config, client, tmp_path):
     """POST /api/ctfd/push with nonexistent file shows 'no longer available'."""
@@ -574,3 +671,406 @@ def test_push_api_file_missing(mock_config, client, tmp_path):
 
     assert response.status_code == 200
     assert b"no longer available" in response.data
+
+
+# --- Plan 11-03: Export bundle route tests ---
+
+
+_MOCK_EXPORT_HISTORY_ENTRY = {
+    "filename": "dns_tunnel_abc123.pcap",
+    "scenario_slug": "dns_tunnel",
+    "scenario_name": "DNS Tunneling",
+    "scenario_description": "Analyze DNS traffic for hidden data.",
+    "category": "covert_channel",
+    "category_label": "Covert Channel",
+    "flag_text": "flag{dns_exfil_2026}",
+    "difficulty": "medium",
+    "timestamp": "2026-03-09T12:00:00",
+    "file_size_bytes": 32768,
+    "pushed": False,
+    "push_challenge_id": None,
+    "push_challenge_name": None,
+    "push_timestamp": None,
+}
+
+
+# --- Plan 12-01: Preview route tests ---
+
+
+@patch("ctf_pcaps.web.routes.load_history")
+@patch("ctf_pcaps.web.routes.analyze_pcap")
+def test_preview_valid_pcap(mock_analyze, mock_history, client, tmp_path):
+    """GET /api/preview/valid.pcap returns 200 with preview HTML."""
+    mock_analyze.return_value = {
+        "packet_count": 42,
+        "protocols": [{"name": "TCP", "count": 30, "pct": 71.4}],
+        "top_conversations": [{"src": "10.0.0.1", "dst": "10.0.0.2", "count": 30}],
+        "timeline": {
+            "duration_seconds": 5.0,
+            "first_packet": 1000.0,
+            "last_packet": 1005.0,
+            "avg_packet_rate": 8.4,
+        },
+        "file_size_bytes": 4096,
+    }
+    mock_history.return_value = [
+        {"filename": "valid.pcap", "flag_text": "flag{test}", "difficulty": "medium"}
+    ]
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "valid.pcap").write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 20)
+
+        response = client.get("/api/preview/valid.pcap")
+
+    assert response.status_code == 200
+    assert b"PCAP Preview" in response.data
+    assert b"42" in response.data
+
+
+def test_preview_missing_file(client, tmp_path):
+    """GET /api/preview/missing.pcap returns 404 when file does not exist."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+
+        response = client.get("/api/preview/missing.pcap")
+
+    assert response.status_code == 404
+
+
+def test_preview_path_traversal(client):
+    """GET /api/preview/../../etc/passwd returns 404 (path traversal blocked)."""
+    response = client.get("/api/preview/../../etc/passwd")
+    assert response.status_code == 404
+
+
+def test_preview_non_pcap_extension(client):
+    """GET /api/preview/notapcap.txt returns 404 (non-.pcap extension rejected)."""
+    response = client.get("/api/preview/notapcap.txt")
+    assert response.status_code == 404
+
+
+# --- Plan 11-03: Export bundle route tests ---
+
+
+@patch("ctf_pcaps.web.routes.load_history")
+def test_export_bundle_returns_zip(mock_history, client, tmp_path):
+    """GET /export/valid.pcap returns 200 with application/zip mimetype."""
+    mock_history.return_value = [{**_MOCK_EXPORT_HISTORY_ENTRY}]
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "dns_tunnel_abc123.pcap").write_bytes(
+            b"\xd4\xc3\xb2\xa1" + b"\x00" * 20
+        )
+
+        response = client.get("/export/dns_tunnel_abc123.pcap")
+
+    assert response.status_code == 200
+    assert response.content_type == "application/zip"
+
+
+def test_export_nonexistent_pcap_404(client, tmp_path):
+    """GET /export/nonexistent.pcap returns 404."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+
+        response = client.get("/export/nonexistent.pcap")
+
+    assert response.status_code == 404
+
+
+def test_export_invalid_extension_404(client, tmp_path):
+    """GET /export/invalid.txt returns 404 (wrong extension)."""
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+
+        response = client.get("/export/invalid.txt")
+
+    assert response.status_code == 404
+
+
+@patch("ctf_pcaps.web.routes.load_history")
+def test_export_bundle_contains_expected_files(mock_history, client, tmp_path):
+    """Export ZIP contains challenge.yml, dist/pcap, and writeup.md."""
+    import io
+    import zipfile
+
+    mock_history.return_value = [{**_MOCK_EXPORT_HISTORY_ENTRY}]
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "dns_tunnel_abc123.pcap").write_bytes(
+            b"\xd4\xc3\xb2\xa1" + b"\x00" * 20
+        )
+
+        response = client.get("/export/dns_tunnel_abc123.pcap")
+
+    buf = io.BytesIO(response.data)
+    with zipfile.ZipFile(buf) as zf:
+        names = zf.namelist()
+
+    assert "challenge.yml" in names
+    assert "dist/dns_tunnel_abc123.pcap" in names
+    assert "writeup.md" in names
+
+
+# --- Plan 12-02: Batch generation tests ---
+
+
+def test_batch_form_returns_200(client):
+    """GET /batch returns 200 with batch form content."""
+    response = client.get("/batch")
+    assert response.status_code == 200
+    assert b"Batch Generate" in response.data
+
+
+def test_batch_form_contains_select_all(client):
+    """GET /batch contains Select All button."""
+    response = client.get("/batch")
+    assert response.status_code == 200
+    assert b"Select All" in response.data
+    assert b"Clear All" in response.data
+
+
+def test_batch_form_contains_scenario_checkboxes(client):
+    """GET /batch contains scenario checkbox elements."""
+    response = client.get("/batch")
+    assert response.status_code == 200
+    assert b"scenario-checkbox" in response.data
+    assert b"SYN Port Scan" in response.data
+
+
+def test_batch_stream_no_scenarios(client):
+    """GET /batch/stream with no scenarios returns batch-complete SSE."""
+    response = client.get("/batch/stream")
+    assert response.status_code == 200
+    assert b"event: batch-complete" in response.data
+
+
+def test_batch_form_contains_shared_params(client):
+    """GET /batch contains shared flag format and difficulty fields."""
+    response = client.get("/batch")
+    assert response.status_code == 200
+    assert b"batch_flag_format" in response.data
+    assert b"batch_difficulty" in response.data
+
+
+def test_batch_form_contains_accordion(client):
+    """GET /batch contains per-scenario accordion for overrides."""
+    response = client.get("/batch")
+    assert response.status_code == 200
+    assert b"scenarioAccordion" in response.data
+
+
+# --- Plan 12-03: Batch download and push tests ---
+
+_MOCK_BATCH_ENTRY = {
+    "filename": "syn_scan_abc123.pcap",
+    "scenario_slug": "syn_scan",
+    "scenario_name": "SYN Port Scan",
+    "scenario_description": "Simulates a SYN port scan attack.",
+    "category": "network_attack",
+    "category_label": "Network Attack",
+    "flag_text": "flag{batch_test_1}",
+    "difficulty": "medium",
+    "timestamp": "2026-03-09T12:00:00",
+    "file_size_bytes": 52480,
+    "pushed": False,
+    "push_challenge_id": None,
+    "push_challenge_name": None,
+    "push_timestamp": None,
+    "batch_id": "testbatch01",
+    "writeup_filename": "syn_scan_abc123_writeup.md",
+    "player_filename": "syn_scan_abc123_player.md",
+}
+
+_MOCK_BATCH_ENTRY_2 = {
+    "filename": "dns_tunnel_def456.pcap",
+    "scenario_slug": "dns_tunnel",
+    "scenario_name": "DNS Tunneling",
+    "scenario_description": "DNS tunnel exfiltration.",
+    "category": "covert_channel",
+    "category_label": "Covert Channel",
+    "flag_text": "flag{batch_test_2}",
+    "difficulty": "hard",
+    "timestamp": "2026-03-09T12:01:00",
+    "file_size_bytes": 32768,
+    "pushed": False,
+    "push_challenge_id": None,
+    "push_challenge_name": None,
+    "push_timestamp": None,
+    "batch_id": "testbatch01",
+    "writeup_filename": "dns_tunnel_def456_writeup.md",
+    "player_filename": "dns_tunnel_def456_player.md",
+}
+
+
+@patch("ctf_pcaps.web.routes.load_history_by_batch")
+def test_batch_download_returns_zip(mock_batch, client, tmp_path):
+    """GET /batch/download/<valid_batch_id> returns 200 with ZIP content type."""
+    mock_batch.return_value = [_MOCK_BATCH_ENTRY]
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "syn_scan_abc123.pcap").write_bytes(b"fake pcap data")
+        (tmp_path / "syn_scan_abc123_writeup.md").write_text(
+            "# Writeup", encoding="utf-8"
+        )
+        (tmp_path / "syn_scan_abc123_player.md").write_text(
+            "# Player", encoding="utf-8"
+        )
+
+        response = client.get("/batch/download/testbatch01")
+
+    assert response.status_code == 200
+    assert response.content_type == "application/zip"
+
+
+def test_batch_download_invalid_batch_404(client, tmp_path):
+    """GET /batch/download/<invalid_batch_id> returns 404."""
+    with patch("ctf_pcaps.web.routes.load_history_by_batch") as mock_batch:
+        mock_batch.return_value = []
+        with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+            mock_cfg = MagicMock()
+            mock_cfg.OUTPUT_DIR = str(tmp_path)
+            mock_get_config.return_value = mock_cfg
+
+            response = client.get("/batch/download/nonexistent")
+
+    assert response.status_code == 404
+
+
+@patch("ctf_pcaps.web.routes.load_history_by_batch")
+def test_batch_download_zip_contains_files(mock_batch, client, tmp_path):
+    """Batch ZIP contains expected .pcap and writeup files."""
+    import io
+    import zipfile
+
+    mock_batch.return_value = [_MOCK_BATCH_ENTRY, _MOCK_BATCH_ENTRY_2]
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "syn_scan_abc123.pcap").write_bytes(b"fake pcap 1")
+        (tmp_path / "syn_scan_abc123_writeup.md").write_text(
+            "# Writeup 1", encoding="utf-8"
+        )
+        (tmp_path / "dns_tunnel_def456.pcap").write_bytes(b"fake pcap 2")
+        (tmp_path / "dns_tunnel_def456_writeup.md").write_text(
+            "# Writeup 2", encoding="utf-8"
+        )
+
+        response = client.get("/batch/download/testbatch01")
+
+    assert response.status_code == 200
+
+    buf = io.BytesIO(response.data)
+    with zipfile.ZipFile(buf) as zf:
+        names = zf.namelist()
+
+    assert "syn_scan_abc123.pcap" in names
+    assert "syn_scan_abc123_writeup.md" in names
+    assert "dns_tunnel_def456.pcap" in names
+    assert "dns_tunnel_def456_writeup.md" in names
+
+
+# --- Plan 12-03: Batch push SSE tests ---
+
+
+@patch("ctf_pcaps.web.routes.load_ctfd_config")
+@patch("ctf_pcaps.web.routes.load_history_by_batch")
+def test_batch_push_stream_returns_sse(mock_batch, mock_config, client, tmp_path):
+    """GET /batch/push/<batch_id>/stream returns text/event-stream content type."""
+    mock_batch.return_value = [{**_MOCK_BATCH_ENTRY, "pushed": False}]
+    mock_config.return_value = {"url": "https://ctfd.test", "token": "tok123"}
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+        (tmp_path / "syn_scan_abc123.pcap").write_bytes(b"fake pcap")
+
+        with patch("ctf_pcaps.web.routes.CTFdClient") as mock_client_cls:
+            mock_instance = MagicMock()
+            mock_instance.push_challenge.return_value = {
+                "challenge_id": 99,
+                "admin_url": "https://ctfd.test/admin/challenges/99",
+            }
+            mock_client_cls.return_value = mock_instance
+
+            with patch("ctf_pcaps.web.routes.update_history_push_status"):
+                response = client.get("/batch/push/testbatch01/stream")
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.content_type
+
+
+def test_batch_nav_link_visible(client):
+    """Navigation bar contains 'Batch' link to /batch."""
+    response = client.get("/", follow_redirects=True)
+    assert response.status_code == 200
+    assert b"/batch" in response.data
+    assert b"Batch" in response.data
+
+
+@patch("ctf_pcaps.web.routes.load_ctfd_config")
+@patch("ctf_pcaps.web.routes.load_history_by_batch")
+def test_batch_push_empty_batch_graceful(mock_batch, mock_config, client, tmp_path):
+    """GET /batch/push/<invalid>/stream handles empty batch gracefully."""
+    mock_batch.return_value = []
+    mock_config.return_value = {"url": "https://ctfd.test", "token": "tok123"}
+
+    with patch("ctf_pcaps.web.routes.get_config") as mock_get_config:
+        mock_cfg = MagicMock()
+        mock_cfg.OUTPUT_DIR = str(tmp_path)
+        mock_get_config.return_value = mock_cfg
+
+        response = client.get("/batch/push/nonexistent/stream")
+
+    assert response.status_code == 200
+    assert "text/event-stream" in response.content_type
+    assert b"No challenges to push" in response.data
+
+
+# --- Plan 14-01: Category label coverage test ---
+
+
+def test_category_labels_covers_all_scenario_categories():
+    """Every scenario YAML category value has a matching CATEGORY_LABELS key."""
+    from pathlib import Path
+
+    import yaml
+
+    from ctf_pcaps.web.routes import CATEGORY_LABELS
+
+    scenarios_dir = Path(__file__).resolve().parents[2] / "scenarios"
+    categories = set()
+    for yaml_file in scenarios_dir.glob("*.yaml"):
+        with open(yaml_file) as f:
+            data = yaml.safe_load(f)
+        if data and "metadata" in data:
+            cat = data["metadata"].get("category")
+            if cat:
+                categories.add(cat)
+
+    assert len(categories) > 0, "No categories found in scenario YAML files"
+    for cat in categories:
+        assert cat in CATEGORY_LABELS, (
+            f"Category '{cat}' found in scenario YAML but missing from CATEGORY_LABELS"
+        )

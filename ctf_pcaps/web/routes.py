@@ -1,6 +1,7 @@
 """Blueprint with main routes for the CTF PCAP Generator."""
 
 import queue
+import secrets
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,9 +24,14 @@ from werkzeug.utils import secure_filename
 
 from ctf_pcaps.config import get_config
 from ctf_pcaps.engine.difficulty import _PRESETS
+from ctf_pcaps.engine.export import build_challenge_yml, create_export_bundle
+from ctf_pcaps.engine.hints import DEFAULT_POINTS as HINT_DEFAULT_POINTS
+from ctf_pcaps.engine.hints import generate_hints
 from ctf_pcaps.engine.loader import load_template, validate_template
 from ctf_pcaps.engine.models import GenerationResult, ScenarioTemplate
 from ctf_pcaps.engine.pipeline import generate as engine_generate
+from ctf_pcaps.engine.preview import analyze_pcap, get_flag_status
+from ctf_pcaps.engine.writeup import generate_writeup
 from ctf_pcaps.integration.ctfd_client import (
     CTFdAuthError,
     CTFdClient,
@@ -36,6 +42,7 @@ from ctf_pcaps.integration.ctfd_client import (
 from ctf_pcaps.integration.persistence import (
     load_ctfd_config,
     load_history,
+    load_history_by_batch,
     save_ctfd_config,
     save_history_entry,
     update_history_push_status,
@@ -50,6 +57,7 @@ CATEGORY_LABELS = {
     "web_traffic": "Web Traffic",
     "covert_channel": "Covert Channel",
     "malware_c2": "Malware / C2",
+    "post_exploitation": "Post-Exploitation",
 }
 
 _scenario_cache: list[dict] | None = None
@@ -315,6 +323,10 @@ def generate_stream(scenario):
     flag_format = request.args.get("flag_format", "flag")
     difficulty = request.args.get("difficulty") or None
 
+    # Parse split_count (only used when no difficulty preset)
+    raw_split = request.args.get("split_count")
+    split_count = int(raw_split) if raw_split and raw_split.isdigit() else 1
+
     # Parse scenario parameter overrides
     overrides = _coerce_form_params(dict(request.args), scenario_dict["parameters"])
 
@@ -332,6 +344,7 @@ def generate_stream(scenario):
                 "callback": progress_callback,
                 "flag_format": flag_format,
                 "difficulty": difficulty,
+                "split_count": split_count,
             }
             if flag_text is not _SKIP_FLAG:
                 kwargs["flag_text"] = flag_text
@@ -372,6 +385,26 @@ def generate_stream(scenario):
 
             elif event_type == "result":
                 result = data
+
+                # Generate writeup files alongside PCAP
+                try:
+                    author_md, player_md = generate_writeup(
+                        result=result,
+                        scenario_name=scenario_dict["name"],
+                        scenario_description=scenario_dict["description"],
+                        scenario_slug=scenario,
+                        difficulty=difficulty,
+                    )
+                    stem = result.file_path.stem
+                    author_path = result.file_path.parent / f"{stem}_writeup.md"
+                    player_path = result.file_path.parent / f"{stem}_player.md"
+                    author_path.write_text(author_md, encoding="utf-8")
+                    player_path.write_text(player_md, encoding="utf-8")
+                except Exception:
+                    logger.exception("writeup_generation_error")
+                    author_path = None
+                    player_path = None
+
                 # Build template-friendly result dict
                 size_bytes = result.file_size_bytes
                 if size_bytes < 1024 * 1024:
@@ -390,6 +423,10 @@ def generate_stream(scenario):
                     "flag_text": result.flag_text,
                     "solve_steps": result.solve_steps,
                     "filename": result.file_path.name,
+                    "split_count": result.split_count,
+                    "split_active": result.split_active,
+                    "writeup_filename": (author_path.name if author_path else None),
+                    "player_filename": (player_path.name if player_path else None),
                 }
 
                 # Record generation in history for push page
@@ -409,6 +446,11 @@ def generate_stream(scenario):
                         "push_challenge_id": None,
                         "push_challenge_name": None,
                         "push_timestamp": None,
+                        "writeup_filename": (author_path.name if author_path else None),
+                        "player_filename": (player_path.name if player_path else None),
+                        "encoding_chain": result.encoding_chain,
+                        "split_active": result.split_active,
+                        "split_count": result.split_count,
                     }
                     save_history_entry(
                         Path(get_config().OUTPUT_DIR),
@@ -472,6 +514,96 @@ def download_file(filename):
         safe_name,
         as_attachment=True,
         mimetype="application/vnd.tcpdump.pcap",
+    )
+
+
+@bp.route("/download/writeup/<filename>")
+def download_writeup(filename):
+    """Serve a generated writeup file for download.
+
+    Args:
+        filename: The writeup .md filename to download.
+    """
+    from flask import send_from_directory
+
+    safe_name = secure_filename(filename)
+    if not safe_name or not safe_name.endswith(".md"):
+        abort(404)
+    config = get_config()
+    file_path = Path(config.OUTPUT_DIR) / safe_name
+    if not file_path.exists():
+        abort(404)
+    return send_from_directory(
+        config.OUTPUT_DIR,
+        safe_name,
+        as_attachment=True,
+        mimetype="text/markdown",
+    )
+
+
+@bp.route("/download/player/<filename>")
+def download_player(filename):
+    """Serve a generated player writeup file for download.
+
+    Args:
+        filename: The player writeup .md filename to download.
+    """
+    from flask import send_from_directory
+
+    safe_name = secure_filename(filename)
+    if not safe_name or not safe_name.endswith(".md"):
+        abort(404)
+    config = get_config()
+    file_path = Path(config.OUTPUT_DIR) / safe_name
+    if not file_path.exists():
+        abort(404)
+    return send_from_directory(
+        config.OUTPUT_DIR,
+        safe_name,
+        as_attachment=True,
+        mimetype="text/markdown",
+    )
+
+
+MAX_PREVIEW_SIZE_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+@bp.route("/api/preview/<filename>")
+def preview_pcap(filename):
+    """Return an HTMX partial with PCAP analysis preview.
+
+    Analyzes the PCAP file using Scapy and returns an HTML fragment
+    with protocol breakdown, top conversations, timeline, and flag status.
+
+    Args:
+        filename: The PCAP filename to preview.
+    """
+    safe_name = secure_filename(filename)
+    if not safe_name or not safe_name.endswith(".pcap"):
+        abort(404)
+
+    config = get_config()
+    file_path = Path(config.OUTPUT_DIR) / safe_name
+    if not file_path.exists():
+        abort(404)
+
+    # Check file size before loading
+    if file_path.stat().st_size > MAX_PREVIEW_SIZE_BYTES:
+        return "<div class='alert alert-warning'>File too large for preview.</div>"
+
+    analysis = analyze_pcap(str(file_path))
+
+    # Look up history entry for flag status
+    output_dir = Path(config.OUTPUT_DIR)
+    history = load_history(output_dir)
+    entry = next((e for e in history if e.get("filename") == safe_name), None)
+    flag_status = get_flag_status(entry) if entry else get_flag_status({})
+
+    return render_template(
+        "generate/_preview.html",
+        preview=analysis,
+        flag_status=flag_status,
+        filename=safe_name,
     )
 
 
@@ -643,6 +775,14 @@ def push_challenge():
     entry = next((e for e in history if e.get("filename") == filename), None)
     flag_text = entry.get("flag_text", "") if entry else ""
 
+    # Generate hints for this challenge
+    hints = generate_hints(
+        builder_name=entry.get("scenario_slug", "") if entry else "",
+        difficulty=entry.get("difficulty") if entry else None,
+        encoding_chain=entry.get("encoding_chain", []),
+        challenge_value=value,
+    )
+
     try:
         client = CTFdClient(ctfd_config["url"], ctfd_config["token"])
         result = client.push_challenge(
@@ -653,6 +793,7 @@ def push_challenge():
             state=state,
             file_path=file_path,
             flag_content=flag_text,
+            hints=hints,
         )
 
         # Update history push status
@@ -705,6 +846,735 @@ def push_challenge():
             success=False,
             error=f"Unexpected error: {exc}",
         )
+
+
+@bp.route("/export/<filename>")
+def export_bundle(filename):
+    """Generate and serve a ctfcli-compatible challenge ZIP bundle.
+
+    Assembles challenge.yml + PCAP + writeup into a ZIP download.
+
+    Args:
+        filename: The PCAP filename from generation history.
+    """
+    config = get_config()
+    output_dir = Path(config.OUTPUT_DIR)
+
+    # Validate PCAP exists
+    safe_name = secure_filename(filename)
+    if not safe_name or not safe_name.endswith(".pcap"):
+        abort(404)
+    pcap_path = output_dir / safe_name
+    if not pcap_path.exists():
+        abort(404)
+
+    # Load history entry for metadata
+    history = load_history(output_dir)
+    entry = next((e for e in history if e.get("filename") == safe_name), None)
+    if entry is None:
+        abort(404)
+
+    # Determine challenge metadata
+    scenario_name = entry.get("scenario_name", entry.get("scenario_slug", "Challenge"))
+    description = entry.get("scenario_description", "")
+    category = entry.get("category", "misc")
+    difficulty = entry.get("difficulty")
+    value = HINT_DEFAULT_POINTS.get(difficulty, 100) if difficulty else 100
+    flag_text = entry.get("flag_text", "")
+
+    # Generate hints
+    hints = generate_hints(
+        builder_name=entry.get("scenario_slug", ""),
+        difficulty=difficulty,
+        encoding_chain=entry.get("encoding_chain", []),
+        challenge_value=value,
+    )
+
+    # Build challenge.yml
+    challenge_yml = build_challenge_yml(
+        name=scenario_name,
+        description=description,
+        category=category,
+        value=value,
+        flag_text=flag_text,
+        hints=hints,
+        pcap_filename=safe_name,
+    )
+
+    # Read writeup if it exists, else generate a placeholder
+    stem = pcap_path.stem
+    writeup_path = output_dir / f"{stem}_writeup.md"
+    if writeup_path.exists():
+        writeup_md = writeup_path.read_text(encoding="utf-8")
+    else:
+        writeup_md = f"# {scenario_name}\n\nWriteup not available.\n"
+
+    # Create ZIP bundle
+    zip_buffer = create_export_bundle(challenge_yml, pcap_path, writeup_md)
+
+    # Return ZIP as download
+    bundle_name = f"{stem}_bundle.zip"
+    return FlaskResponse(
+        zip_buffer.getvalue(),
+        mimetype="application/zip",
+        headers={
+            "Content-Disposition": f"attachment; filename={bundle_name}",
+        },
+    )
+
+
+@bp.route("/batch")
+def batch_form():
+    """Render the batch generation form with scenario checkboxes."""
+    scenarios_dir = _get_scenarios_dir()
+    scenario_list = discover_scenarios(scenarios_dir)
+    return render_template("batch/form.html", scenarios=scenario_list)
+
+
+@bp.route("/batch/stream")
+def batch_stream():
+    """SSE endpoint that generates multiple PCAPs sequentially.
+
+    Accepts repeated ``scenarios`` query params for selected slugs,
+    shared ``flag_format`` and ``difficulty``, and per-scenario overrides
+    prefixed with ``slug__paramname``.
+    """
+    selected_slugs = request.args.getlist("scenarios")
+
+    if not selected_slugs:
+        empty_html = render_template(
+            "batch/_result.html",
+            batch_id="",
+            results=[],
+            errors=[],
+            completed=0,
+            total=0,
+        )
+        return FlaskResponse(
+            _format_sse("batch-complete", empty_html),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    flag_format = request.args.get("flag_format", "flag")
+    difficulty = request.args.get("difficulty") or None
+    batch_id = secrets.token_hex(8)
+
+    scenarios_dir = _get_scenarios_dir()
+    all_scenarios = discover_scenarios(scenarios_dir)
+    scenario_map = {s["slug"]: s for s in all_scenarios}
+
+    # Build list of selected scenarios with per-scenario overrides
+    selected = []
+    for slug in selected_slugs:
+        sc = scenario_map.get(slug)
+        if sc is None:
+            continue
+        # Parse per-scenario overrides: slug__paramname -> paramname
+        prefix = f"{slug}__"
+        override_data = {}
+        for key, val in request.args.items():
+            if key.startswith(prefix):
+                param_name = key[len(prefix) :]
+                override_data[f"param_{param_name}"] = val
+        overrides = _coerce_form_params(override_data, sc["parameters"])
+        selected.append({"scenario": sc, "overrides": overrides})
+
+    total = len(selected)
+    progress_queue: queue.Queue = queue.Queue()
+
+    # Track status for all scenarios
+    scenarios_status = []
+    for i, item in enumerate(selected):
+        scenarios_status.append(
+            {
+                "index": i,
+                "slug": item["scenario"]["slug"],
+                "name": item["scenario"]["name"],
+                "status": "queued",
+                "pct": 0,
+                "result": None,
+                "error": None,
+            }
+        )
+
+    def run_batch():
+        results_list = []
+        errors_list = []
+        for i, item in enumerate(selected):
+            sc = item["scenario"]
+            overrides = item["overrides"]
+            progress_queue.put(
+                (
+                    "scenario-start",
+                    {
+                        "index": i,
+                        "slug": sc["slug"],
+                        "name": sc["name"],
+                        "total": total,
+                    },
+                )
+            )
+
+            def make_callback(idx):
+                def cb(current):
+                    pct = min(int((current / 1000) * 90), 95)
+                    progress_queue.put(
+                        ("scenario-progress", {"index": idx, "pct": pct})
+                    )
+
+                return cb
+
+            try:
+                result = engine_generate(
+                    template_path=sc["path"],
+                    overrides=overrides,
+                    callback=make_callback(i),
+                    flag_format=flag_format,
+                    difficulty=difficulty,
+                    flag_text=None,  # Auto-generate unique flag per scenario
+                )
+
+                if isinstance(result, GenerationResult):
+                    # Generate writeups
+                    author_path = None
+                    player_path = None
+                    try:
+                        author_md, player_md = generate_writeup(
+                            result=result,
+                            scenario_name=sc["name"],
+                            scenario_description=sc["description"],
+                            scenario_slug=sc["slug"],
+                            difficulty=difficulty,
+                        )
+                        stem = result.file_path.stem
+                        author_path = result.file_path.parent / f"{stem}_writeup.md"
+                        player_path = result.file_path.parent / f"{stem}_player.md"
+                        author_path.write_text(author_md, encoding="utf-8")
+                        player_path.write_text(player_md, encoding="utf-8")
+                    except Exception:
+                        logger.exception("batch_writeup_error", slug=sc["slug"])
+
+                    # Build display-friendly size
+                    size_bytes = result.file_size_bytes
+                    if size_bytes < 1024 * 1024:
+                        file_size_display = f"{size_bytes / 1024:.1f} KB"
+                    else:
+                        file_size_display = f"{size_bytes / (1024 * 1024):.1f} MB"
+
+                    result_dict = {
+                        "scenario_name": sc["name"],
+                        "scenario_slug": sc["slug"],
+                        "filename": result.file_path.name,
+                        "flag_text": result.flag_text,
+                        "file_size_bytes": result.file_size_bytes,
+                        "file_size_display": file_size_display,
+                        "flag_verified": result.flag_verified,
+                        "writeup_filename": (author_path.name if author_path else None),
+                        "player_filename": (player_path.name if player_path else None),
+                    }
+
+                    # Save history entry with batch_id
+                    try:
+                        history_entry = {
+                            "filename": result.file_path.name,
+                            "scenario_slug": sc["slug"],
+                            "scenario_name": sc["name"],
+                            "scenario_description": sc["description"],
+                            "category": sc["category"],
+                            "category_label": sc["category_label"],
+                            "flag_text": result.flag_text,
+                            "difficulty": result.difficulty_preset,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "file_size_bytes": result.file_size_bytes,
+                            "pushed": False,
+                            "push_challenge_id": None,
+                            "push_challenge_name": None,
+                            "push_timestamp": None,
+                            "writeup_filename": (
+                                author_path.name if author_path else None
+                            ),
+                            "player_filename": (
+                                player_path.name if player_path else None
+                            ),
+                            "batch_id": batch_id,
+                            "encoding_chain": result.encoding_chain,
+                            "split_active": result.split_active,
+                            "split_count": result.split_count,
+                        }
+                        save_history_entry(
+                            Path(get_config().OUTPUT_DIR),
+                            history_entry,
+                        )
+                    except Exception:
+                        logger.exception("batch_history_save_error", slug=sc["slug"])
+
+                    results_list.append(result_dict)
+                    progress_queue.put(
+                        ("scenario-done", {"index": i, "result": result_dict})
+                    )
+                elif isinstance(result, list):
+                    error_msg = "; ".join(result)
+                    errors_list.append(
+                        {"index": i, "slug": sc["slug"], "error": error_msg}
+                    )
+                    progress_queue.put(
+                        (
+                            "scenario-error",
+                            {
+                                "index": i,
+                                "slug": sc["slug"],
+                                "error": error_msg,
+                            },
+                        )
+                    )
+                else:
+                    errors_list.append(
+                        {
+                            "index": i,
+                            "slug": sc["slug"],
+                            "error": "Unexpected result type",
+                        }
+                    )
+                    progress_queue.put(
+                        (
+                            "scenario-error",
+                            {
+                                "index": i,
+                                "slug": sc["slug"],
+                                "error": "Unexpected result type",
+                            },
+                        )
+                    )
+            except Exception as e:
+                logger.exception(
+                    "batch_generation_error", slug=sc["slug"], error=str(e)
+                )
+                errors_list.append({"index": i, "slug": sc["slug"], "error": str(e)})
+                progress_queue.put(
+                    (
+                        "scenario-error",
+                        {"index": i, "slug": sc["slug"], "error": str(e)},
+                    )
+                )
+
+        progress_queue.put(
+            (
+                "batch-complete",
+                {
+                    "batch_id": batch_id,
+                    "results": results_list,
+                    "errors": errors_list,
+                },
+            )
+        )
+
+    thread = threading.Thread(target=run_batch, daemon=True)
+    thread.start()
+
+    def event_stream():
+        while True:
+            try:
+                event_type, data = progress_queue.get(timeout=600)
+            except queue.Empty:
+                timeout_html = render_template(
+                    "batch/_result.html",
+                    batch_id=batch_id,
+                    results=[],
+                    errors=[{"index": 0, "slug": "", "error": "Timed out"}],
+                    completed=0,
+                    total=total,
+                )
+                yield _format_sse("batch-complete", timeout_html)
+                break
+
+            if event_type == "scenario-start":
+                idx = data["index"]
+                scenarios_status[idx]["status"] = "generating"
+                scenarios_status[idx]["pct"] = 0
+                completed = sum(
+                    1 for s in scenarios_status if s["status"] in ("done", "error")
+                )
+                html = render_template(
+                    "batch/_progress.html",
+                    scenarios_status=scenarios_status,
+                    completed=completed,
+                    total=total,
+                )
+                yield _format_sse("batch-progress", html)
+
+            elif event_type == "scenario-progress":
+                idx = data["index"]
+                scenarios_status[idx]["pct"] = data["pct"]
+                completed = sum(
+                    1 for s in scenarios_status if s["status"] in ("done", "error")
+                )
+                html = render_template(
+                    "batch/_progress.html",
+                    scenarios_status=scenarios_status,
+                    completed=completed,
+                    total=total,
+                )
+                yield _format_sse("batch-progress", html)
+
+            elif event_type == "scenario-done":
+                idx = data["index"]
+                scenarios_status[idx]["status"] = "done"
+                scenarios_status[idx]["pct"] = 100
+                scenarios_status[idx]["result"] = data["result"]
+                completed = sum(
+                    1 for s in scenarios_status if s["status"] in ("done", "error")
+                )
+                html = render_template(
+                    "batch/_progress.html",
+                    scenarios_status=scenarios_status,
+                    completed=completed,
+                    total=total,
+                )
+                yield _format_sse("batch-progress", html)
+
+            elif event_type == "scenario-error":
+                idx = data["index"]
+                scenarios_status[idx]["status"] = "error"
+                scenarios_status[idx]["error"] = data["error"]
+                completed = sum(
+                    1 for s in scenarios_status if s["status"] in ("done", "error")
+                )
+                html = render_template(
+                    "batch/_progress.html",
+                    scenarios_status=scenarios_status,
+                    completed=completed,
+                    total=total,
+                )
+                yield _format_sse("batch-progress", html)
+
+            elif event_type == "batch-complete":
+                results = data["results"]
+                errors = data["errors"]
+                html = render_template(
+                    "batch/_result.html",
+                    batch_id=data["batch_id"],
+                    results=results,
+                    errors=errors,
+                    completed=len(results),
+                    total=total,
+                )
+                yield _format_sse("batch-complete", html)
+                break
+
+    return FlaskResponse(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@bp.route("/batch/download/<batch_id>")
+def batch_download(batch_id):
+    """Download all PCAPs and writeups from a batch as a single ZIP file.
+
+    Collects all history entries for the batch, filters to those with
+    existing files, and returns a ZIP archive with flat structure.
+
+    Args:
+        batch_id: The batch identifier from batch generation.
+    """
+    import io
+    import zipfile
+
+    from flask import send_file
+
+    config = get_config()
+    output_dir = Path(config.OUTPUT_DIR)
+
+    entries = load_history_by_batch(output_dir, batch_id)
+    if not entries:
+        abort(404)
+
+    # Filter to entries where the PCAP file still exists on disk
+    valid_entries = []
+    for entry in entries:
+        pcap_path = output_dir / entry.get("filename", "")
+        if pcap_path.exists():
+            valid_entries.append(entry)
+
+    if not valid_entries:
+        abort(404)
+
+    # Build ZIP in memory
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for entry in valid_entries:
+            filename = entry["filename"]
+            pcap_path = output_dir / filename
+            zf.write(pcap_path, filename)
+
+            # Add writeup if exists
+            stem = Path(filename).stem
+            writeup_path = output_dir / f"{stem}_writeup.md"
+            if writeup_path.exists():
+                zf.write(writeup_path, f"{stem}_writeup.md")
+
+            # Add player writeup if exists
+            player_path = output_dir / f"{stem}_player.md"
+            if player_path.exists():
+                zf.write(player_path, f"{stem}_player.md")
+
+        # Build flags.txt manifest (answer key for organizers)
+        flag_lines = []
+        for entry in valid_entries:
+            flag_text = entry.get("flag_text")
+            if flag_text:
+                scenario_name = entry.get(
+                    "scenario_name", entry.get("scenario_slug", "unknown")
+                )
+                flag_lines.append(f"{scenario_name}: {flag_text}")
+
+        if flag_lines:
+            flags_content = "\n".join(flag_lines) + "\n"
+            zf.writestr("flags.txt", flags_content.encode("utf-8"))
+
+    buf.seek(0)
+
+    zip_filename = f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=zip_filename,
+    )
+
+
+@bp.route("/batch/push/<batch_id>/stream")
+def batch_push_stream(batch_id):
+    """SSE endpoint that pushes all batch challenges to CTFd sequentially.
+
+    For each unpushed entry in the batch, pushes to CTFd with per-challenge
+    progress updates. Errors on individual challenges are skipped and
+    remaining challenges continue.
+
+    Args:
+        batch_id: The batch identifier from batch generation.
+    """
+    config = get_config()
+    output_dir = Path(config.OUTPUT_DIR)
+
+    entries = load_history_by_batch(output_dir, batch_id)
+    # Filter to entries where file exists AND not already pushed
+    pushable = [
+        e
+        for e in entries
+        if (output_dir / e.get("filename", "")).exists() and not e.get("pushed")
+    ]
+
+    # Load CTFd config
+    ctfd_config = load_ctfd_config(output_dir)
+    if not ctfd_config.get("url") or not ctfd_config.get("token"):
+        error_html = (
+            '<div class="alert alert-danger">'
+            "CTFd is not configured. "
+            '<a href="/settings">Go to Settings</a> first.'
+            "</div>"
+        )
+        return FlaskResponse(
+            _format_sse("push-complete", error_html),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    if not pushable:
+        empty_html = (
+            '<div class="alert alert-info">'
+            "No challenges to push. All may have been pushed already."
+            "</div>"
+        )
+        return FlaskResponse(
+            _format_sse("push-complete", empty_html),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    total = len(pushable)
+    progress_queue: queue.Queue = queue.Queue()
+
+    # Initialize push status list for template rendering
+    push_status = []
+    for i, entry in enumerate(pushable):
+        push_status.append(
+            {
+                "index": i,
+                "name": entry.get("scenario_name", entry.get("scenario_slug", "")),
+                "status": "queued",
+                "error": None,
+                "challenge_id": None,
+            }
+        )
+
+    def run_push():
+        client = CTFdClient(ctfd_config["url"], ctfd_config["token"])
+        pushed_count = 0
+        error_count = 0
+
+        for i, entry in enumerate(pushable):
+            name = entry.get("scenario_name", entry.get("scenario_slug", ""))
+            progress_queue.put(
+                ("push-start", {"index": i, "name": name, "total": total})
+            )
+
+            try:
+                slug = entry.get("scenario_slug", "")
+                difficulty = entry.get("difficulty")
+                hints = generate_hints(
+                    builder_name=slug,
+                    difficulty=difficulty,
+                    encoding_chain=entry.get("encoding_chain", []),
+                    challenge_value=DIFFICULTY_POINTS.get(
+                        difficulty.lower() if difficulty else "", 100
+                    ),
+                )
+                points = DIFFICULTY_POINTS.get(
+                    difficulty.lower() if difficulty else "", 100
+                )
+
+                pcap_path = output_dir / entry["filename"]
+                result = client.push_challenge(
+                    name=name,
+                    description=entry.get("scenario_description", ""),
+                    category=entry.get("category_label", "Misc"),
+                    value=points,
+                    state="hidden",
+                    file_path=pcap_path,
+                    flag_content=entry.get("flag_text", ""),
+                    hints=hints,
+                )
+
+                update_history_push_status(
+                    output_dir,
+                    filename=entry["filename"],
+                    challenge_id=result["challenge_id"],
+                    challenge_name=name,
+                )
+                pushed_count += 1
+                progress_queue.put(
+                    (
+                        "push-done",
+                        {
+                            "index": i,
+                            "name": name,
+                            "challenge_id": result["challenge_id"],
+                        },
+                    )
+                )
+            except Exception as exc:
+                logger.exception(
+                    "batch_push_error",
+                    slug=entry.get("scenario_slug"),
+                    error=str(exc),
+                )
+                error_count += 1
+                progress_queue.put(
+                    ("push-error", {"index": i, "name": name, "error": str(exc)})
+                )
+
+        progress_queue.put(
+            (
+                "push-complete",
+                {
+                    "pushed_count": pushed_count,
+                    "error_count": error_count,
+                    "total": total,
+                },
+            )
+        )
+
+    thread = threading.Thread(target=run_push, daemon=True)
+    thread.start()
+
+    def event_stream():
+        while True:
+            try:
+                event_type, data = progress_queue.get(timeout=600)
+            except queue.Empty:
+                timeout_html = (
+                    '<div class="alert alert-warning">Push operation timed out.</div>'
+                )
+                yield _format_sse("push-complete", timeout_html)
+                break
+
+            if event_type == "push-start":
+                idx = data["index"]
+                push_status[idx]["status"] = "pushing"
+                html = render_template(
+                    "batch/_push_progress.html",
+                    push_status=push_status,
+                    pushed=sum(
+                        1 for s in push_status if s["status"] in ("done", "error")
+                    ),
+                    total=total,
+                )
+                yield _format_sse("push-progress", html)
+
+            elif event_type == "push-done":
+                idx = data["index"]
+                push_status[idx]["status"] = "done"
+                push_status[idx]["challenge_id"] = data["challenge_id"]
+                html = render_template(
+                    "batch/_push_progress.html",
+                    push_status=push_status,
+                    pushed=sum(
+                        1 for s in push_status if s["status"] in ("done", "error")
+                    ),
+                    total=total,
+                )
+                yield _format_sse("push-progress", html)
+
+            elif event_type == "push-error":
+                idx = data["index"]
+                push_status[idx]["status"] = "error"
+                push_status[idx]["error"] = data["error"]
+                html = render_template(
+                    "batch/_push_progress.html",
+                    push_status=push_status,
+                    pushed=sum(
+                        1 for s in push_status if s["status"] in ("done", "error")
+                    ),
+                    total=total,
+                )
+                yield _format_sse("push-progress", html)
+
+            elif event_type == "push-complete":
+                summary_html = render_template(
+                    "batch/_push_progress.html",
+                    push_status=push_status,
+                    pushed=data["pushed_count"],
+                    total=data["total"],
+                    complete=True,
+                    pushed_count=data["pushed_count"],
+                    error_count=data["error_count"],
+                )
+                yield _format_sse("push-complete", summary_html)
+                break
+
+    return FlaskResponse(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @bp.app_errorhandler(404)

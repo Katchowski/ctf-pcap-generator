@@ -31,9 +31,12 @@ from ctf_pcaps.engine.flag import (
     build_flag_payload,
     decode_flag_chain,
     embed_flag_packet,
+    embed_split_flag_packets,
     encode_flag_chain,
     extract_addresses,
+    split_encoded_string,
     verify_flag_in_pcap,
+    verify_split_flag_in_pcap,
     verify_stealth,
 )
 from ctf_pcaps.engine.loader import (
@@ -129,6 +132,7 @@ def generate(
     flag_format: str = "flag",
     flag_encoding: str = "plaintext",
     difficulty: str | None = None,
+    split_count: int = 1,
 ) -> GenerationResult | list[dict]:
     """Generate a PCAP file from a YAML scenario template.
 
@@ -150,6 +154,8 @@ def generate(
                        "hex", "rot13").
         difficulty: Difficulty preset ("easy", "medium", "hard") or None.
                     When set, preset encoding chain overrides flag_encoding.
+        split_count: Number of flag fragments (1 = no splitting). When
+                     difficulty is set, preset split_count overrides this.
 
     Returns:
         GenerationResult on success, or list of error dicts on failure.
@@ -175,12 +181,14 @@ def generate(
 
     difficulty_active = resolved_difficulty is not None
 
-    # When difficulty is active, encoding_chain from preset takes
-    # precedence over flag_encoding
+    # When difficulty is active, encoding_chain and split_count from preset
+    # take precedence over manual parameters
     if difficulty_active:
         active_encoding_chain = resolved_difficulty["encoding_chain"]
+        active_split_count = resolved_difficulty["split_count"]
     else:
         active_encoding_chain = [flag_encoding]  # Wrap single encoding
+        active_split_count = split_count  # Use manual parameter
 
     output_dir = Path(config.OUTPUT_DIR) if output_dir is None else Path(output_dir)
 
@@ -251,13 +259,9 @@ def generate(
         logger.warning("pipeline_builder_not_found", error=error)
         return [error]
 
-    # Step 8: Build packets
-    builder = builder_cls()
-    packets = builder.build(merged_params, resolved_steps, callback)
-    logger.info("pipeline_building", builder=template.builder)
-
-    # Step 8.5: Flag embedding (optional)
+    # Step 8 pre: Assemble flag before build so builders can embed thematically
     assembled_flag = None
+    encoded_flag = None
     verification_result = None
     if flag_active:
         # Assemble the flag (auto-generate inner text if None)
@@ -266,33 +270,76 @@ def generate(
         # Encode the flag using the active encoding chain
         encoded_flag = encode_flag_chain(assembled_flag, active_encoding_chain)
 
+        # Inject flag text and encoding into params for thematic embedding
+        merged_params["__flag_text"] = assembled_flag
+        merged_params["__flag_encoding"] = active_encoding_chain
+
+    # Step 8: Build packets
+    builder = builder_cls()
+    packets = builder.build(merged_params, resolved_steps, callback)
+    logger.info("pipeline_building", builder=template.builder)
+
+    # Step 8.5: Flag packet embedding (optional)
+    if flag_active:
         # Buffer packets for address extraction and embedding
         packet_list = list(packets)
 
         # Extract addresses from builder packets
         addrs = extract_addresses(packet_list)
 
-        # Build flag payload and packet
+        # Build flag payload(s) and packet(s)
         session_id = secrets.token_hex(3)
-        payload = build_flag_payload(
-            encoded_flag, addrs["src_ip"], addrs["dst_ip"], session_id
-        )
-        flag_pkt = build_flag_packet(
-            template.protocol,
-            addrs["src_ip"],
-            addrs["dst_ip"],
-            addrs["sport"],
-            addrs["dport"],
-            payload,
-        )
 
-        # Embed flag packet into packet stream
-        packets = embed_flag_packet(iter(packet_list), flag_pkt)
-        logger.info(
-            "flag_embedded_in_pipeline",
-            encoding_chain=active_encoding_chain,
-            flag_format=flag_format,
-        )
+        if active_split_count > 1:
+            # Split mode: divide encoded flag into fragments
+            chunks = split_encoded_string(encoded_flag, active_split_count)
+            fragment_packets = []
+            for i, chunk in enumerate(chunks, start=1):
+                payload = build_flag_payload(
+                    chunk,
+                    addrs["src_ip"],
+                    addrs["dst_ip"],
+                    session_id,
+                    part=i,
+                    total=active_split_count,
+                )
+                flag_pkt = build_flag_packet(
+                    template.protocol,
+                    addrs["src_ip"],
+                    addrs["dst_ip"],
+                    addrs["sport"],
+                    addrs["dport"],
+                    payload,
+                )
+                fragment_packets.append(flag_pkt)
+
+            # Scatter fragment packets at random positions
+            packets = embed_split_flag_packets(iter(packet_list), fragment_packets)
+            logger.info(
+                "split_flag_embedded_in_pipeline",
+                split_count=active_split_count,
+                encoding_chain=active_encoding_chain,
+                flag_format=flag_format,
+            )
+        else:
+            # Single flag mode: unchanged behavior
+            payload = build_flag_payload(
+                encoded_flag, addrs["src_ip"], addrs["dst_ip"], session_id
+            )
+            flag_pkt = build_flag_packet(
+                template.protocol,
+                addrs["src_ip"],
+                addrs["dst_ip"],
+                addrs["sport"],
+                addrs["dport"],
+                payload,
+            )
+            packets = embed_flag_packet(iter(packet_list), flag_pkt)
+            logger.info(
+                "flag_embedded_in_pipeline",
+                encoding_chain=active_encoding_chain,
+                flag_format=flag_format,
+            )
 
     # Step 8.7: Create MACRegistry (always, not just when difficulty active)
     mac_registry = MACRegistry()
@@ -358,19 +405,32 @@ def generate(
         def chain_decode_fn(data):
             return decode_flag_chain(data, active_encoding_chain)
 
-        # Use first encoding in chain for verify_flag_in_pcap logging
-        primary_encoding = active_encoding_chain[0]
-        verification_result = verify_flag_in_pcap(
-            str(file_path), assembled_flag, primary_encoding, chain_decode_fn
-        )
-
-        # Override solve_steps with chain-aware steps when chain > 1
-        if verification_result["verified"] and len(active_encoding_chain) > 1:
-            verification_result["solve_steps"] = _build_solve_steps_chain(
-                verification_result["packet_index"],
+        if active_split_count > 1:
+            # Split flag verification: find fragments and reassemble
+            verification_result = verify_split_flag_in_pcap(
+                str(file_path),
+                assembled_flag,
                 active_encoding_chain,
-                {},  # payload_data not needed for chain steps
+                chain_decode_fn,
+                active_split_count,
             )
+        else:
+            # Single flag verification (unchanged)
+            primary_encoding = active_encoding_chain[0]
+            verification_result = verify_flag_in_pcap(
+                str(file_path),
+                assembled_flag,
+                primary_encoding,
+                chain_decode_fn,
+            )
+
+            # Override solve_steps with chain-aware steps when chain > 1
+            if verification_result["verified"] and len(active_encoding_chain) > 1:
+                verification_result["solve_steps"] = _build_solve_steps_chain(
+                    verification_result["packet_index"],
+                    active_encoding_chain,
+                    {},  # payload_data not needed for chain steps
+                )
 
         if not verification_result["verified"]:
             os.unlink(file_path)
@@ -423,6 +483,8 @@ def generate(
             resolved_difficulty["timing_jitter_ms"] if difficulty_active else None
         ),
         encoding_chain=active_encoding_chain if flag_active else [],
+        split_count=active_split_count,
+        split_active=active_split_count > 1,
     )
 
     logger.info(

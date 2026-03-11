@@ -1,0 +1,36 @@
+builder: arp_spoofing
+protocol: tcp
+metadata:
+  name: "ARP Spoofing / MITM"
+  description: "Gratuitous ARP replies with intercepted HTTP/DNS traffic from MITM position"
+  category: "network_attack"
+  difficulty_hint: "hard"
+parameters:
+  attacker_ip:
+    default: "10.0.0.100"
+    description: "Attacker IP address performing ARP spoofing"
+  victim_ip:
+    default: "10.0.0.50"
+    description: "Victim IP address being targeted"
+  gateway_ip:
+    default: "10.0.0.1"
+    description: "Gateway IP address being impersonated"
+  arp_count:
+    default: 5
+    min: 3
+    max: 20
+    description: "Number of gratuitous ARP replies to send"
+  intercepted_type:
+    default: "http"
+    choices: ["http", "dns", "mixed"]
+    description: "Type of intercepted traffic (http, dns, or mixed)"
+  target_host:
+    default: "mail.example.com"
+    description: "HTTP Host header for intercepted traffic"
+  dport:
+    default: 80
+    min: 1
+    max: 65535
+    description: "Destination port for intercepted HTTP traffic"
+steps:
+  - action: arp_spoofing_attack

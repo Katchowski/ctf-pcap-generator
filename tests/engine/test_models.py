@@ -171,6 +171,8 @@ class TestGenerationResult:
             "noise_types",
             "timing_jitter_ms",
             "encoding_chain",
+            "split_count",
+            "split_active",
         }
         assert field_names == expected
 

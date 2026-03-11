@@ -54,8 +54,8 @@ class TestSessionHeaders:
     def test_authorization_header_set(self, client):
         assert client.session.headers["Authorization"] == "Token test-token-123"
 
-    def test_content_type_not_set_on_session(self, client):
-        assert "Content-Type" not in client.session.headers
+    def test_content_type_set_on_session(self, client):
+        assert client.session.headers["Content-Type"] == "application/json"
 
 
 class TestTestConnection:
@@ -375,6 +375,197 @@ class TestPushChallenge:
         assert uploaded_filename == "test_scan.pcap"
         assert "/" not in uploaded_filename
         assert "\\" not in uploaded_filename
+
+
+class TestCreateHint:
+    """Tests for _create_hint method."""
+
+    def test_create_hint_sends_correct_payload(self, client):
+        """_create_hint sends correct JSON to /api/v1/hints."""
+        hint_resp = MagicMock()
+        hint_resp.status_code = 200
+        hint_resp.json.return_value = {
+            "success": True,
+            "data": {"id": 7, "challenge_id": 42},
+        }
+        hint_resp.raise_for_status = MagicMock()
+
+        with patch.object(client.session, "post", return_value=hint_resp) as mock_post:
+            result = client._create_hint(
+                challenge_id=42,
+                content="Look at DNS traffic.",
+                cost=25,
+            )
+
+        assert result == 7
+        mock_post.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        assert call_kwargs["json"] == {
+            "challenge_id": 42,
+            "content": "Look at DNS traffic.",
+            "cost": 25,
+            "type": "standard",
+        }
+        assert "/api/v1/hints" in mock_post.call_args[0][0]
+
+    def test_create_hint_connection_error(self, client):
+        """_create_hint raises CTFdConnectionError on timeout."""
+        with (
+            patch.object(
+                client.session,
+                "post",
+                side_effect=requests.exceptions.Timeout,
+            ),
+            pytest.raises(CTFdConnectionError),
+        ):
+            client._create_hint(challenge_id=42, content="hint", cost=10)
+
+
+class TestPushChallengeWithHints:
+    """Tests for push_challenge with hints parameter."""
+
+    def _setup_push_mocks_with_hints(self, hint_count=2):
+        """Create mocks for a push flow with hint creation."""
+        # GET /api/v1/challenges
+        challenges_resp = MagicMock()
+        challenges_resp.status_code = 200
+        challenges_resp.json.return_value = {"success": True, "data": []}
+        challenges_resp.raise_for_status = MagicMock()
+
+        # POST /api/v1/challenges
+        create_resp = MagicMock()
+        create_resp.status_code = 200
+        create_resp.json.return_value = {
+            "success": True,
+            "data": {"id": 42, "name": "Test"},
+        }
+        create_resp.raise_for_status = MagicMock()
+
+        # POST /api/v1/files
+        upload_resp = MagicMock()
+        upload_resp.status_code = 200
+        upload_resp.json.return_value = {
+            "success": True,
+            "data": [{"id": 1}],
+        }
+        upload_resp.raise_for_status = MagicMock()
+
+        # POST /api/v1/flags
+        flag_resp = MagicMock()
+        flag_resp.status_code = 200
+        flag_resp.json.return_value = {
+            "success": True,
+            "data": {"id": 1, "challenge_id": 42},
+        }
+        flag_resp.raise_for_status = MagicMock()
+
+        # POST /api/v1/hints responses
+        hint_resps = []
+        for i in range(hint_count):
+            hint_resp = MagicMock()
+            hint_resp.status_code = 200
+            hint_resp.json.return_value = {
+                "success": True,
+                "data": {"id": 10 + i, "challenge_id": 42},
+            }
+            hint_resp.raise_for_status = MagicMock()
+            hint_resps.append(hint_resp)
+
+        post_responses = [create_resp, upload_resp, flag_resp, *hint_resps]
+        return challenges_resp, post_responses
+
+    def test_push_with_hints_creates_hints(self, client, tmp_path):
+        """push_challenge with hints creates hints after flag."""
+        pcap_file = tmp_path / "test.pcap"
+        pcap_file.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 100)
+
+        challenges_resp, post_responses = self._setup_push_mocks_with_hints(
+            hint_count=2
+        )
+
+        hints = [
+            {"content": "Look at DNS traffic.", "cost": 25},
+            {"content": "Filter dns.qry.name.", "cost": 50},
+        ]
+
+        with (
+            patch.object(client.session, "get", return_value=challenges_resp),
+            patch.object(
+                client.session, "post", side_effect=post_responses
+            ) as mock_post,
+        ):
+            result = client.push_challenge(
+                name="Test",
+                description="Test",
+                category="Network Attack",
+                value=250,
+                state="hidden",
+                file_path=pcap_file,
+                flag_content="flag{test}",
+                hints=hints,
+            )
+
+        # 3 base posts + 2 hint posts = 5
+        assert mock_post.call_count == 5
+        assert result["challenge_id"] == 42
+
+    def test_push_without_hints_backward_compatible(self, client, tmp_path):
+        """push_challenge without hints still works (no hint creation)."""
+        pcap_file = tmp_path / "test.pcap"
+        pcap_file.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 100)
+
+        challenges_resp, post_responses = self._setup_push_mocks_with_hints(
+            hint_count=0
+        )
+
+        with (
+            patch.object(client.session, "get", return_value=challenges_resp),
+            patch.object(
+                client.session, "post", side_effect=post_responses
+            ) as mock_post,
+        ):
+            result = client.push_challenge(
+                name="Test",
+                description="Test",
+                category="Network Attack",
+                value=250,
+                state="hidden",
+                file_path=pcap_file,
+                flag_content="flag{test}",
+            )
+
+        # Only 3 base posts (no hints)
+        assert mock_post.call_count == 3
+        assert result["challenge_id"] == 42
+
+    def test_push_with_hints_none_backward_compatible(self, client, tmp_path):
+        """push_challenge with hints=None skips hint creation."""
+        pcap_file = tmp_path / "test.pcap"
+        pcap_file.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 100)
+
+        challenges_resp, post_responses = self._setup_push_mocks_with_hints(
+            hint_count=0
+        )
+
+        with (
+            patch.object(client.session, "get", return_value=challenges_resp),
+            patch.object(
+                client.session, "post", side_effect=post_responses
+            ) as mock_post,
+        ):
+            result = client.push_challenge(
+                name="Test",
+                description="Test",
+                category="Network Attack",
+                value=250,
+                state="hidden",
+                file_path=pcap_file,
+                flag_content="flag{test}",
+                hints=None,
+            )
+
+        assert mock_post.call_count == 3
+        assert result["challenge_id"] == 42
 
 
 class TestExceptionHierarchy:

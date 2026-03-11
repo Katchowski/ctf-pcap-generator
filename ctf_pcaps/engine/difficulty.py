@@ -41,6 +41,8 @@ class DifficultyPreset(BaseModel):
     packet_count_max: int
     noise_types: list[str]
     timing_jitter_ms: tuple[float, float]
+    split_count_min: int = 1
+    split_count_max: int = 1
 
     @field_validator("noise_ratio")
     @classmethod
@@ -85,6 +87,26 @@ class DifficultyPreset(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_split_count_range(self):
+        """Ensure split_count_min >= 1 and split_count_min <= split_count_max."""
+        if self.split_count_min < 1:
+            raise PydanticCustomError(
+                "invalid_split_count",
+                "split_count_min must be >= 1, got {value}",
+                {"value": self.split_count_min},
+            )
+        if self.split_count_min > self.split_count_max:
+            raise PydanticCustomError(
+                "invalid_split_range",
+                "split_count_min ({min_val}) cannot exceed split_count_max ({max_val})",
+                {
+                    "min_val": self.split_count_min,
+                    "max_val": self.split_count_max,
+                },
+            )
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Hard Encoding Chains Pool
@@ -112,6 +134,8 @@ EASY = DifficultyPreset(
     packet_count_max=50,
     noise_types=["ARP"],
     timing_jitter_ms=(10.0, 50.0),
+    split_count_min=1,
+    split_count_max=1,
 )
 
 MEDIUM = DifficultyPreset(
@@ -122,6 +146,8 @@ MEDIUM = DifficultyPreset(
     packet_count_max=500,
     noise_types=["ARP", "DNS"],
     timing_jitter_ms=(5.0, 200.0),
+    split_count_min=2,
+    split_count_max=2,
 )
 
 HARD = DifficultyPreset(
@@ -132,6 +158,8 @@ HARD = DifficultyPreset(
     packet_count_max=5000,
     noise_types=["ARP", "DNS", "HTTP", "ICMP"],
     timing_jitter_ms=(1.0, 500.0),
+    split_count_min=3,
+    split_count_max=4,
 )
 
 # Lookup table for preset resolution
@@ -181,6 +209,9 @@ def resolve_difficulty(
         preset.packet_count_min, preset.packet_count_max
     )
 
+    # Randomize split_count within preset range
+    split_count = random.randint(preset.split_count_min, preset.split_count_max)
+
     # For hard preset without encoding_chain override: random selection from pool
     if key == "hard" and (overrides is None or "encoding_chain" not in overrides):
         encoding_chain = random.choice(HARD_ENCODING_CHAINS)
@@ -193,6 +224,7 @@ def resolve_difficulty(
         "packet_count_target": packet_count_target,
         "noise_types": list(preset.noise_types),
         "timing_jitter_ms": preset.timing_jitter_ms,
+        "split_count": split_count,
     }
 
     # Merge overrides

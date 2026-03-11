@@ -3,5 +3,6 @@
   Encoding: {{ preset.encoding_chain|join(' -> ') }} |
   Noise: {{ (preset.noise_ratio * 100)|int }}% |
   Packets: {{ preset.packet_count_min }}-{{ preset.packet_count_max }} |
-  Noise types: {{ preset.noise_types|join(', ') }}
+  Noise types: {{ preset.noise_types|join(', ') }} |
+  Flag split: {% if preset.split_count_min == preset.split_count_max %}{{ preset.split_count_min }}{% else %}{{ preset.split_count_min }}-{{ preset.split_count_max }}{% endif %} parts
 </div>

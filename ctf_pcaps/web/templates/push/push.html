@@ -20,6 +20,7 @@
             <th>Difficulty</th>
             <th>Flag</th>
             <th>File Size</th>
+            <th>Writeup</th>
             <th>Generated</th>
             <th>Status</th>
             <th>Action</th>
@@ -49,6 +50,13 @@
               {% endif %}
             </td>
             <td>
+              {% if entry.writeup_filename %}
+              <span class="badge bg-success">Yes</span>
+              {% else %}
+              <span class="text-muted">-</span>
+              {% endif %}
+            </td>
+            <td>
               {% if entry.timestamp %}
               <span class="small">{{ entry.timestamp[:19].replace('T', ' ') }}</span>
               {% else %}
@@ -69,14 +77,20 @@
               {# No button for expired files #}
               {% else %}
               <a href="/download/{{ entry.filename }}" class="btn btn-sm btn-success me-1">Download</a>
-              {% if entry.pushed %}
-              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-outline-info">Push Again</a>
-              {% else %}
-              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-primary">Push</a>
+              {% if entry.writeup_filename %}
+              <a href="/download/writeup/{{ entry.writeup_filename }}" class="btn btn-sm btn-outline-success me-1" title="Solution Writeup">Writeup</a>
               {% endif %}
+              {% if entry.pushed %}
+              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-outline-info me-1">Push Again</a>
+              {% else %}
+              <a href="/push/{{ entry.filename }}" class="btn btn-sm btn-primary me-1">Push</a>
+              {% endif %}
+              <button hx-get="/api/preview/{{ entry.filename }}" hx-target="#preview-{{ loop.index }}" hx-swap="innerHTML" hx-indicator="#spinner-{{ loop.index }}" class="btn btn-sm btn-outline-info">Preview</button>
+              <span id="spinner-{{ loop.index }}" class="htmx-indicator"><span class="spinner-border spinner-border-sm"></span></span>
               {% endif %}
             </td>
           </tr>
+          <tr id="preview-{{ loop.index }}" class="preview-row"></tr>
           {% endfor %}
         </tbody>
       </table>

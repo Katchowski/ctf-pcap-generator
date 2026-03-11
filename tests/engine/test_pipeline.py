@@ -734,3 +734,94 @@ class TestPipelineRealismIntegration:
         assert isinstance(result, GenerationResult)
         assert result.flag_verified is True
         assert result.flag_text == "flag{secret}"
+
+
+# -----------------------------------------------------------------------
+# Flag Splitting Pipeline Integration Tests (Plan 10-02)
+# -----------------------------------------------------------------------
+
+
+class TestGenerateSplitFlagIntegration:
+    """Tests for split_count in the generate() pipeline."""
+
+    def _write_template(self, tmp_path, template_data):
+        """Helper to write a YAML template to tmp_path."""
+        template_file = tmp_path / "template.yaml"
+        template_file.write_text(yaml.dump(template_data))
+        return template_file
+
+    def _tcp_template_data(self):
+        """Return a standard TCP template for testing."""
+        return {
+            "builder": "simple_tcp",
+            "protocol": "tcp",
+            "parameters": {
+                "dst_ip": {"default": "10.0.0.2", "description": "Target IP"},
+                "dport": {
+                    "default": 80,
+                    "min": 1,
+                    "max": 65535,
+                    "description": "Target port",
+                },
+            },
+            "steps": [{"action": "send_data", "payload": "Hello"}],
+        }
+
+    def test_split_count_2_produces_split_result(self, tmp_path):
+        """generate() with split_count=2 sets split_active=True and split_count=2."""
+        from ctf_pcaps.engine.pipeline import generate
+
+        template_file = self._write_template(tmp_path, self._tcp_template_data())
+        output_dir = tmp_path / "output"
+        result = generate(
+            template_file, output_dir, flag_text="split_me", split_count=2
+        )
+
+        assert isinstance(result, GenerationResult)
+        assert result.split_count == 2
+        assert result.split_active is True
+        assert result.flag_verified is True
+        assert result.flag_text == "flag{split_me}"
+
+    def test_split_count_1_default_no_split(self, tmp_path):
+        """generate() with split_count=1 (default) sets split_active=False."""
+        from ctf_pcaps.engine.pipeline import generate
+
+        template_file = self._write_template(tmp_path, self._tcp_template_data())
+        output_dir = tmp_path / "output"
+        result = generate(template_file, output_dir, flag_text="no_split")
+
+        assert isinstance(result, GenerationResult)
+        assert result.split_count == 1
+        assert result.split_active is False
+        assert result.flag_verified is True
+
+    def test_difficulty_medium_uses_split_count_2(self, tmp_path):
+        """generate() with difficulty='medium' uses split_count=2 from preset."""
+        from ctf_pcaps.engine.pipeline import generate
+
+        template_file = self._write_template(tmp_path, self._tcp_template_data())
+        output_dir = tmp_path / "output"
+        result = generate(
+            template_file, output_dir, flag_text="medium_split", difficulty="medium"
+        )
+
+        assert isinstance(result, GenerationResult)
+        assert result.split_count == 2
+        assert result.split_active is True
+        assert result.flag_verified is True
+
+    def test_difficulty_easy_no_split(self, tmp_path):
+        """generate() with difficulty='easy' uses split_count=1 (no splitting)."""
+        from ctf_pcaps.engine.pipeline import generate
+
+        template_file = self._write_template(tmp_path, self._tcp_template_data())
+        output_dir = tmp_path / "output"
+        result = generate(
+            template_file, output_dir, flag_text="easy_flag", difficulty="easy"
+        )
+
+        assert isinstance(result, GenerationResult)
+        assert result.split_count == 1
+        assert result.split_active is False
+        assert result.flag_verified is True

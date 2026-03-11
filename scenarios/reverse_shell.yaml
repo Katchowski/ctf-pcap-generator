@@ -1,0 +1,33 @@
+builder: reverse_shell
+protocol: tcp
+metadata:
+  name: "Reverse Shell"
+  description: "Interactive reverse shell session with OS-specific command/response traffic over a persistent TCP connection"
+  category: "post_exploitation"
+  difficulty_hint: "hard"
+parameters:
+  victim_ip:
+    default: "10.0.0.50"
+    description: "Compromised host IP address"
+  attacker_ip:
+    default: "10.0.0.200"
+    description: "Attacker listener IP address"
+  listener_port:
+    default: 4444
+    min: 1
+    max: 65535
+    description: "Attacker listener port"
+  os_type:
+    default: "linux"
+    choices: ["linux", "windows"]
+    description: "Target OS for command set and file paths"
+  command_count:
+    default: 6
+    min: 3
+    max: 12
+    description: "Number of interactive commands in the session"
+  shell_prompt:
+    default: "$ "
+    description: "Shell prompt string displayed after each command output"
+steps:
+  - action: reverse_shell_session

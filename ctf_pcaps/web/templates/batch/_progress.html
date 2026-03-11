@@ -1,0 +1,57 @@
+<div class="my-4">
+  <h5>Generating: {{ completed }}/{{ total }} scenarios</h5>
+  {% set overall_pct = ((completed / total) * 100) | int if total > 0 else 0 %}
+  <div class="progress mb-3" style="height: 25px;">
+    <div class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+         role="progressbar"
+         style="width: {{ overall_pct }}%"
+         aria-valuenow="{{ overall_pct }}"
+         aria-valuemin="0"
+         aria-valuemax="100">{{ overall_pct }}%</div>
+  </div>
+  <table class="table table-sm">
+    <thead>
+      <tr>
+        <th>Scenario</th>
+        <th>Status</th>
+        <th>Progress</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sc in scenarios_status %}
+      <tr>
+        <td>{{ sc.name }}</td>
+        <td>
+          {% if sc.status == 'queued' %}
+          <span class="badge bg-secondary">Queued</span>
+          {% elif sc.status == 'generating' %}
+          <span class="badge bg-primary">Generating</span>
+          {% elif sc.status == 'done' %}
+          <span class="badge bg-success">Done</span>
+          {% elif sc.status == 'error' %}
+          <span class="badge bg-danger">Error</span>
+          {% endif %}
+        </td>
+        <td style="width: 40%;">
+          {% if sc.status == 'generating' %}
+          <div class="progress" style="height: 20px;">
+            <div class="progress-bar progress-bar-striped progress-bar-animated"
+                 style="width: {{ sc.pct }}%">{{ sc.pct }}%</div>
+          </div>
+          {% elif sc.status == 'done' %}
+          <div class="progress" style="height: 20px;">
+            <div class="progress-bar bg-success" style="width: 100%">100%</div>
+          </div>
+          {% elif sc.status == 'error' %}
+          <small class="text-danger">{{ sc.error }}</small>
+          {% else %}
+          <div class="progress" style="height: 20px;">
+            <div class="progress-bar bg-secondary" style="width: 0%"></div>
+          </div>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

@@ -1,7 +1,7 @@
-"""Stale PCAP file cleanup based on time-to-live.
+"""Stale file cleanup based on time-to-live.
 
-Sweeps an output directory and deletes .pcap files older than the
-configured TTL, plus orphaned .pcap.tmp files older than 1 hour.
+Sweeps an output directory and deletes .pcap files, writeup .md files,
+and orphaned .pcap.tmp files older than the configured TTL.
 
 No Flask imports allowed in engine modules.
 """
@@ -15,15 +15,16 @@ logger = structlog.get_logger()
 
 
 def sweep_stale_files(output_dir: str | Path, ttl_hours: int = 24) -> int:
-    """Delete stale .pcap files and orphaned .pcap.tmp files.
+    """Delete stale .pcap files, writeup .md files, and orphaned .pcap.tmp files.
 
     Scans the output directory and removes:
     - .pcap files with mtime older than ttl_hours
+    - _writeup.md and _player.md files with mtime older than ttl_hours
     - .pcap.tmp files with mtime older than 1 hour (orphaned temp files)
 
     Args:
         output_dir: Directory to sweep.
-        ttl_hours: Maximum age in hours for .pcap files.
+        ttl_hours: Maximum age in hours for .pcap and writeup files.
 
     Returns:
         Count of deleted files.
@@ -52,10 +53,12 @@ def sweep_stale_files(output_dir: str | Path, ttl_hours: int = 24) -> int:
                     age_hours=round((now - mtime) / 3600, 1),
                 )
                 deleted += 1
-            elif (
-                file_path.suffix == ".pcap"
-                and not file_path.name.endswith(".pcap.tmp")
-                and mtime < pcap_cutoff
+            elif mtime < pcap_cutoff and (
+                (
+                    file_path.suffix == ".pcap"
+                    and not file_path.name.endswith(".pcap.tmp")
+                )
+                or file_path.name.endswith(("_writeup.md", "_player.md"))
             ):
                 file_path.unlink()
                 logger.info(

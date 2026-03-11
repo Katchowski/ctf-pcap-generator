@@ -53,10 +53,12 @@ class CTFdClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update({
-            "Authorization": f"Token {api_token}",
-            "Content-Type": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "Authorization": f"Token {api_token}",
+                "Content-Type": "application/json",
+            }
+        )
         self.session.allow_redirects = False
 
     # -- Public API --
@@ -110,13 +112,15 @@ class CTFdClient:
         state: str,
         file_path: Path,
         flag_content: str,
+        hints: list[dict] | None = None,
     ) -> dict:
-        """Push a complete challenge to CTFd (three-step flow).
+        """Push a complete challenge to CTFd (multi-step flow).
 
         1. Check for duplicate challenge name.
         2. POST /api/v1/challenges to create the challenge entry.
         3. POST /api/v1/files to upload the PCAP file.
         4. POST /api/v1/flags to create the matching flag.
+        5. POST /api/v1/hints for each hint (if provided).
 
         Args:
             name: Challenge display name.
@@ -126,6 +130,7 @@ class CTFdClient:
             state: "hidden" or "visible".
             file_path: Path to the PCAP file to upload.
             flag_content: The flag string to create.
+            hints: Optional list of {"content": str, "cost": int} dicts.
 
         Returns:
             Dict with "challenge_id" and "admin_url" keys.
@@ -156,6 +161,15 @@ class CTFdClient:
         # Step 3: Create flag
         self._create_flag(challenge_id=challenge_id, flag_content=flag_content)
 
+        # Step 4: Create hints (if provided)
+        if hints:
+            for hint in hints:
+                self._create_hint(
+                    challenge_id=challenge_id,
+                    content=hint["content"],
+                    cost=hint["cost"],
+                )
+
         admin_url = f"{self.base_url}/admin/challenges/{challenge_id}"
         logger.info(
             "ctfd_push_complete",
@@ -184,9 +198,8 @@ class CTFdClient:
         try:
             data = resp.json().get("data", [])
         except (ValueError, requests.exceptions.JSONDecodeError):
-            raise CTFdError(
-                f"Unexpected response from CTFd at {url} (not JSON)"
-            )
+            msg = f"Unexpected response from CTFd at {url} (not JSON)"
+            raise CTFdError(msg) from None
         for challenge in data:
             if challenge.get("name") == name:
                 raise CTFdDuplicateError(f"A challenge named '{name}' already exists")
@@ -288,6 +301,47 @@ class CTFdClient:
 
         self._handle_response_errors(resp)
         logger.info("ctfd_flag_created", challenge_id=challenge_id)
+
+    def _create_hint(self, *, challenge_id: int, content: str, cost: int) -> int:
+        """POST /api/v1/hints -- create a hint for a challenge.
+
+        Args:
+            challenge_id: CTFd challenge ID to attach hint to.
+            content: Hint text content.
+            cost: Point cost to unlock the hint.
+
+        Returns:
+            The created hint's ID.
+        """
+        url = f"{self.base_url}/api/v1/hints"
+        logger.info("ctfd_create_hint", challenge_id=challenge_id, cost=cost)
+
+        try:
+            resp = self.session.post(
+                url,
+                json={
+                    "challenge_id": challenge_id,
+                    "content": content,
+                    "cost": cost,
+                    "type": "standard",
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=self.timeout,
+            )
+        except (
+            requests.exceptions.Timeout,
+            requests.exceptions.ConnectionError,
+        ) as exc:
+            raise CTFdConnectionError(f"Cannot reach CTFd at {self.base_url}") from exc
+
+        self._handle_response_errors(resp)
+        hint_id = resp.json()["data"]["id"]
+        logger.info(
+            "ctfd_hint_created",
+            challenge_id=challenge_id,
+            hint_id=hint_id,
+        )
+        return hint_id
 
     def _handle_response_errors(self, resp: requests.Response) -> None:
         """Map HTTP errors to CTFd-specific exceptions."""

@@ -89,3 +89,62 @@ class TestSweepStaleFiles:
         count = sweep_stale_files(tmp_path, ttl_hours=24)
         assert count == 0
         assert txt_file.exists()
+
+    def test_deletes_old_writeup_files(self, tmp_path):
+        """sweep_stale_files() deletes _writeup.md files older than ttl_hours."""
+        writeup = tmp_path / "dns_tunnel_abc123_writeup.md"
+        writeup.write_text("# Writeup")
+        self._age_file(writeup, 48)
+
+        count = sweep_stale_files(tmp_path, ttl_hours=24)
+        assert count == 1
+        assert not writeup.exists()
+
+    def test_deletes_old_player_files(self, tmp_path):
+        """sweep_stale_files() deletes _player.md files older than ttl_hours."""
+        player = tmp_path / "dns_tunnel_abc123_player.md"
+        player.write_text("# Player")
+        self._age_file(player, 48)
+
+        count = sweep_stale_files(tmp_path, ttl_hours=24)
+        assert count == 1
+        assert not player.exists()
+
+    def test_keeps_new_writeup_files(self, tmp_path):
+        """sweep_stale_files() keeps writeup .md files newer than ttl_hours."""
+        writeup = tmp_path / "dns_tunnel_abc123_writeup.md"
+        writeup.write_text("# Writeup")
+
+        count = sweep_stale_files(tmp_path, ttl_hours=24)
+        assert count == 0
+        assert writeup.exists()
+
+    def test_ignores_non_writeup_md_files(self, tmp_path):
+        """sweep_stale_files() ignores .md files that don't match writeup pattern."""
+        readme = tmp_path / "README.md"
+        readme.write_text("# Readme")
+        self._age_file(readme, 48)
+
+        count = sweep_stale_files(tmp_path, ttl_hours=24)
+        assert count == 0
+        assert readme.exists()
+
+    def test_deletes_pcap_and_writeup_together(self, tmp_path):
+        """sweep_stale_files() deletes stale .pcap, _writeup.md, and _player.md."""
+        pcap = tmp_path / "dns_tunnel_abc123.pcap"
+        pcap.write_bytes(b"fake pcap")
+        self._age_file(pcap, 48)
+
+        writeup = tmp_path / "dns_tunnel_abc123_writeup.md"
+        writeup.write_text("# Writeup")
+        self._age_file(writeup, 48)
+
+        player = tmp_path / "dns_tunnel_abc123_player.md"
+        player.write_text("# Player")
+        self._age_file(player, 48)
+
+        count = sweep_stale_files(tmp_path, ttl_hours=24)
+        assert count == 3
+        assert not pcap.exists()
+        assert not writeup.exists()
+        assert not player.exists()

@@ -254,6 +254,8 @@ def build_flag_payload(
     src_ip: str,
     dst_ip: str,
     session_id: str,
+    part: int | None = None,
+    total: int | None = None,
 ) -> bytes:
     """Build realistic JSON payload containing the encoded flag.
 
@@ -261,11 +263,17 @@ def build_flag_payload(
     packet look like structured application data, requiring students
     to parse the payload to find the encoded flag.
 
+    When both part and total are provided, they are included in the
+    JSON payload to indicate this is a split flag fragment. When
+    omitted, the payload format is unchanged for backward compatibility.
+
     Args:
         encoded_flag: The encoded flag string to embed.
         src_ip: Source IP address for metadata.
         dst_ip: Destination IP address for metadata.
         session_id: Session identifier for metadata.
+        part: Fragment number (1-indexed), or None for unsplit flags.
+        total: Total fragment count, or None for unsplit flags.
 
     Returns:
         JSON bytes ready to use as packet payload.
@@ -277,6 +285,9 @@ def build_flag_payload(
         "session_id": session_id,
         "data": encoded_flag,
     }
+    if part is not None and total is not None:
+        payload["part"] = part
+        payload["total"] = total
     return json.dumps(payload).encode()
 
 
@@ -515,6 +526,225 @@ def verify_flag_in_pcap(
 
     logger.info("flag_verified", verified=False, encoding=encoding)
     return {"verified": False, "packet_index": None, "solve_steps": []}
+
+
+# ---------------------------------------------------------------------------
+# Flag Splitting (FLAG-01 / Phase 10)
+# ---------------------------------------------------------------------------
+
+
+def split_encoded_string(encoded: str, split_count: int) -> list[str]:
+    """Split encoded string into N roughly equal chunks.
+
+    First chunk gets the remainder if len(encoded) is not evenly
+    divisible by split_count.
+
+    Args:
+        encoded: The fully encoded flag string.
+        split_count: Number of chunks to produce.
+
+    Returns:
+        List of string chunks.
+
+    Raises:
+        ValueError: If split_count < 1 or > len(encoded).
+    """
+    if split_count < 1:
+        raise ValueError("split_count must be >= 1")
+    if split_count > len(encoded):
+        raise ValueError(
+            f"split_count ({split_count}) exceeds encoded length ({len(encoded)})"
+        )
+
+    chunk_size = len(encoded) // split_count
+    remainder = len(encoded) % split_count
+
+    chunks = []
+    # First chunk gets remainder
+    first_end = chunk_size + remainder
+    chunks.append(encoded[:first_end])
+
+    offset = first_end
+    for _ in range(1, split_count):
+        chunks.append(encoded[offset : offset + chunk_size])
+        offset += chunk_size
+
+    return chunks
+
+
+def embed_split_flag_packets(
+    packets: Iterator[Any],
+    flag_packets: list[Any],
+) -> Iterator[Any]:
+    """Insert multiple flag fragment packets at random positions.
+
+    Each fragment is embedded independently using embed_flag_packet,
+    producing random, non-clustered placement throughout the PCAP.
+
+    Args:
+        packets: Iterator of Scapy packets from the builder.
+        flag_packets: List of flag fragment packets to insert.
+
+    Yields:
+        All original packets plus fragment packets at random positions.
+    """
+    current_stream = packets
+    for flag_pkt in flag_packets:
+        current_stream = embed_flag_packet(current_stream, flag_pkt)
+    yield from current_stream
+
+
+# ---------------------------------------------------------------------------
+# Split-Aware Verification (FLAG-04 / Phase 10)
+# ---------------------------------------------------------------------------
+
+
+def verify_split_flag_in_pcap(
+    pcap_path: str,
+    expected_flag: str,
+    encoding_chain: list[str],
+    decode_fn: Any,
+    expected_total: int,
+) -> dict:
+    """Verify a split flag can be reassembled from PCAP fragments.
+
+    Scans all packets for JSON payloads with "part" and "total" fields.
+    Groups fragments by session_id, sorts by part, concatenates data
+    fields, applies decode_fn, and compares to expected_flag.
+
+    Args:
+        pcap_path: Path to the PCAP file.
+        expected_flag: The assembled flag to verify against.
+        encoding_chain: The encoding chain used (for solve steps).
+        decode_fn: Function to decode the reassembled encoded flag.
+        expected_total: Expected number of fragments.
+
+    Returns:
+        Dict with keys:
+            verified (bool): Whether the flag was found and matches.
+            packet_indices (list[int]): 0-indexed positions of fragments.
+            session_id (str | None): Session ID of matching fragments.
+            solve_steps (list[str]): Wireshark-style instructions.
+    """
+    packets = rdpcap(pcap_path)
+
+    # Collect all fragment payloads grouped by session_id
+    fragments: dict[str, list[dict]] = {}
+    fragment_indices: dict[str, list[int]] = {}
+
+    for idx, pkt in enumerate(packets):
+        payload_candidates = []
+        if pkt.haslayer(Raw):
+            payload_candidates.append(pkt[Raw].load)
+
+        # Fallback: extract raw bytes and search for JSON boundaries
+        raw_bytes = bytes(pkt)
+        start = raw_bytes.find(b'{"src"')
+        if start >= 0:
+            payload_candidates.append(raw_bytes[start:])
+
+        for payload_bytes in payload_candidates:
+            try:
+                payload = payload_bytes.decode("utf-8", errors="ignore")
+                data = json.loads(payload)
+                if "part" not in data or "total" not in data:
+                    continue
+                sid = data.get("session_id", "")
+                fragments.setdefault(sid, []).append(data)
+                fragment_indices.setdefault(sid, []).append(idx)
+                break  # Don't double-count from both candidates
+            except (
+                json.JSONDecodeError,
+                ValueError,
+                KeyError,
+                UnicodeDecodeError,
+            ):
+                continue
+
+    # Try reassembly for each session_id group
+    for sid, frags in fragments.items():
+        if len(frags) != expected_total:
+            continue
+        frags_sorted = sorted(frags, key=lambda f: f["part"])
+        indices_sorted = [fragment_indices[sid][frags.index(f)] for f in frags_sorted]
+        reassembled = "".join(f["data"] for f in frags_sorted)
+        try:
+            decoded = decode_fn(reassembled)
+            if decoded == expected_flag:
+                logger.info(
+                    "split_flag_verified",
+                    verified=True,
+                    session_id=sid,
+                    fragment_count=len(frags),
+                )
+                return {
+                    "verified": True,
+                    "packet_indices": indices_sorted,
+                    "session_id": sid,
+                    "solve_steps": _build_solve_steps_split(
+                        indices_sorted,
+                        encoding_chain,
+                        sid,
+                        expected_total,
+                    ),
+                }
+        except (ValueError, UnicodeDecodeError):
+            continue
+
+    logger.info("split_flag_verified", verified=False)
+    return {
+        "verified": False,
+        "packet_indices": [],
+        "session_id": None,
+        "solve_steps": [],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Split Solve Steps (Phase 10)
+# ---------------------------------------------------------------------------
+
+
+def _build_solve_steps_split(
+    fragment_indices: list[int],
+    encoding_chain: list[str],
+    session_id: str,
+    split_count: int,
+) -> list[str]:
+    """Build Wireshark-style solve steps for a split flag.
+
+    Lists steps to find fragments, reassemble, and decode through
+    the encoding chain.
+
+    Args:
+        fragment_indices: 0-indexed packet positions of fragments.
+        encoding_chain: The encoding chain used for the flag.
+        session_id: The session ID shared by all fragments.
+        split_count: Number of fragments.
+
+    Returns:
+        List of solve step strings.
+    """
+    steps = [
+        "Open the PCAP in Wireshark",
+        "Filter packets containing JSON payloads with 'part' and 'total' fields",
+        f"Identify {split_count} fragments sharing session_id '{session_id}'",
+        f"Sort fragments by 'part' number (1 through {split_count})",
+        "Concatenate the 'data' fields in order to reassemble the encoded flag",
+    ]
+
+    # Add decode steps (same label logic as _build_solve_steps_chain)
+    reversed_chain = list(reversed(encoding_chain))
+    for i, encoding in enumerate(reversed_chain, start=1):
+        label = encoding.upper() if encoding != "rot13" else "ROT13"
+        if encoding == "base64":
+            label = "Base64"
+        elif encoding == "hex":
+            label = "Hex"
+        steps.append(f"Step {i}: Apply {label} decoding to the reassembled value")
+
+    steps.append("The final decoded text is the flag")
+    return steps
 
 
 # ---------------------------------------------------------------------------

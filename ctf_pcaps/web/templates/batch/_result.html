@@ -1,0 +1,96 @@
+<script>
+  var pa = document.getElementById('batch-progress-area');
+  if (pa) pa.innerHTML = '';
+</script>
+<div class="card border-success mt-4" data-batch-id="{{ batch_id }}">
+  <div class="card-body">
+    <h4 class="card-title text-success">Batch Complete: {{ completed }}/{{ total }} scenarios generated successfully</h4>
+    {% if results or errors %}
+    <table class="table table-sm mt-3">
+      <thead>
+        <tr>
+          <th>Scenario</th>
+          <th>Flag</th>
+          <th>File Size</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td>{{ r.scenario_name }}</td>
+          <td>
+            {% if r.flag_verified is not none %}
+              {% if r.flag_verified %}
+                <span class="badge bg-success">Flag Verified</span>
+              {% else %}
+                <span class="badge bg-danger">Flag Failed</span>
+              {% endif %}
+            {% endif %}
+            {% if r.flag_text %}
+              <br><code class="small">{{ r.flag_text[:30] }}{% if r.flag_text|length > 30 %}...{% endif %}</code>
+            {% else %}
+              <span class="text-muted">-</span>
+            {% endif %}
+          </td>
+          <td>{{ r.file_size_display }}</td>
+          <td><span class="badge bg-success">Done</span></td>
+          <td>
+            <a href="/download/{{ r.filename }}" class="btn btn-sm btn-success me-1">Download</a>
+            <button hx-get="/api/preview/{{ r.filename }}"
+                    hx-target="#preview-{{ r.filename | replace('.', '-') }}"
+                    hx-swap="innerHTML"
+                    class="btn btn-sm btn-info me-1">Preview</button>
+            <a href="/push/{{ r.filename }}" class="btn btn-sm btn-primary">Push</a>
+          </td>
+        </tr>
+        <tr id="preview-{{ r.filename | replace('.', '-') }}"></tr>
+        {% endfor %}
+        {% for e in errors %}
+        <tr class="table-danger">
+          <td>{{ e.slug }}</td>
+          <td colspan="2"><small class="text-danger">{{ e.error }}</small></td>
+          <td><span class="badge bg-danger">Error</span></td>
+          <td></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No scenarios were selected or generated.</p>
+    {% endif %}
+    {% if results %}
+    <div class="mt-3">
+      <a href="/batch/download/{{ batch_id }}" class="btn btn-success btn-lg me-2">Download All (ZIP)</a>
+      <button id="push-all-btn" class="btn btn-primary btn-lg me-2"
+              onclick="startBatchPush('{{ batch_id }}')">Push All to CTFd</button>
+      <a href="/batch" class="btn btn-secondary btn-lg">Generate Another Batch</a>
+    </div>
+    <div id="push-progress-area" class="mt-3"></div>
+    <script>
+      function startBatchPush(batchId) {
+        var btn = document.getElementById('push-all-btn');
+        btn.disabled = true;
+        btn.textContent = 'Pushing...';
+        var area = document.getElementById('push-progress-area');
+        var sseDiv = document.createElement('div');
+        sseDiv.setAttribute('hx-ext', 'sse');
+        sseDiv.setAttribute('sse-connect', '/batch/push/' + batchId + '/stream');
+        sseDiv.setAttribute('sse-close', 'push-complete');
+        var progressTarget = document.createElement('div');
+        progressTarget.setAttribute('sse-swap', 'push-progress');
+        progressTarget.setAttribute('hx-swap', 'innerHTML');
+        sseDiv.appendChild(progressTarget);
+        var completeTarget = document.createElement('div');
+        completeTarget.setAttribute('sse-swap', 'push-complete');
+        completeTarget.setAttribute('hx-swap', 'innerHTML');
+        sseDiv.appendChild(completeTarget);
+        area.innerHTML = '';
+        area.appendChild(sseDiv);
+        htmx.process(sseDiv);
+      }
+    </script>
+    {% endif %}
+  </div>
+</div>

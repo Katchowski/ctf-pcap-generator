@@ -1,0 +1,128 @@
+<div class="card mt-3 border-info">
+  <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+    <span><strong>PCAP Preview</strong></span>
+    <span>
+      <span class="badge bg-light text-dark">{{ preview.packet_count }} packets</span>
+      {% if preview.file_size_bytes < 1048576 %}
+      <span class="badge bg-light text-dark">{{ "%.1f"|format(preview.file_size_bytes / 1024) }} KB</span>
+      {% else %}
+      <span class="badge bg-light text-dark">{{ "%.1f"|format(preview.file_size_bytes / 1048576) }} MB</span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="card-body">
+
+    {# Capture Timeline #}
+    <h6 class="text-muted mb-2">Capture Timeline</h6>
+    <div class="row mb-3">
+      <div class="col-sm-3">
+        <small class="text-muted">Duration</small>
+        <div><strong>{{ "%.3f"|format(preview.timeline.duration_seconds) }}s</strong></div>
+      </div>
+      <div class="col-sm-3">
+        <small class="text-muted">First Packet</small>
+        <div>
+          {% if preview.timeline.first_packet %}
+          <strong>{{ preview.timeline.first_packet | int }}</strong>
+          {% else %}
+          <span class="text-muted">N/A</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-sm-3">
+        <small class="text-muted">Last Packet</small>
+        <div>
+          {% if preview.timeline.last_packet %}
+          <strong>{{ preview.timeline.last_packet | int }}</strong>
+          {% else %}
+          <span class="text-muted">N/A</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="col-sm-3">
+        <small class="text-muted">Avg Packet Rate</small>
+        <div><strong>{{ preview.timeline.avg_packet_rate }} pkt/s</strong></div>
+      </div>
+    </div>
+
+    <hr>
+
+    {# Protocol Breakdown #}
+    <h6 class="text-muted mb-2">Protocol Breakdown</h6>
+    {% if preview.protocols %}
+    {% for proto in preview.protocols %}
+    <div class="d-flex align-items-center mb-1">
+      <span class="fw-bold" style="min-width: 60px;">{{ proto.name }}</span>
+      <div class="progress flex-grow-1 mx-2" style="height: 22px;">
+        <div class="progress-bar
+          {% if proto.name == 'TCP' %}bg-primary
+          {% elif proto.name == 'UDP' %}bg-success
+          {% elif proto.name == 'ICMP' %}bg-warning text-dark
+          {% elif proto.name == 'ARP' %}bg-info
+          {% else %}bg-secondary
+          {% endif %}"
+          role="progressbar"
+          style="width: {{ proto.pct }}%"
+          aria-valuenow="{{ proto.pct }}"
+          aria-valuemin="0"
+          aria-valuemax="100">
+          {{ proto.count }} ({{ proto.pct }}%)
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+    {% else %}
+    <p class="text-muted">No protocols detected.</p>
+    {% endif %}
+
+    <hr>
+
+    {# Top Conversations #}
+    <h6 class="text-muted mb-2">Top Conversations</h6>
+    {% if preview.top_conversations %}
+    <table class="table table-sm table-bordered">
+      <thead class="table-light">
+        <tr>
+          <th>Source IP</th>
+          <th>Destination IP</th>
+          <th>Packets</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for convo in preview.top_conversations %}
+        <tr>
+          <td><code>{{ convo.src }}</code></td>
+          <td><code>{{ convo.dst }}</code></td>
+          <td>{{ convo.count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted">No IP traffic detected.</p>
+    {% endif %}
+
+    <hr>
+
+    {# Flag Verification #}
+    <h6 class="text-muted mb-2">Flag Verification</h6>
+    <div>
+      {% if flag_status.verified %}
+      <span class="badge bg-success">Verified</span>
+      {% elif flag_status.verified is sameas false and flag_status.encoding_chain %}
+      <span class="badge bg-danger">Not Verified</span>
+      {% else %}
+      <span class="badge bg-secondary">N/A</span>
+      {% endif %}
+
+      {% if flag_status.encoding_chain %}
+      <span class="ms-2 text-muted small">Encoding: {{ flag_status.encoding_chain }}</span>
+      {% endif %}
+
+      {% if flag_status.split_active %}
+      <span class="ms-2 badge bg-warning text-dark">Split into {{ flag_status.split_count }} parts</span>
+      {% endif %}
+    </div>
+
+  </div>
+</div>

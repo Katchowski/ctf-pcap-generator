@@ -63,6 +63,7 @@ class ScenarioCategory(StrEnum):
     WEB_TRAFFIC = "web_traffic"
     COVERT_CHANNEL = "covert_channel"
     MALWARE_C2 = "malware_c2"
+    POST_EXPLOITATION = "post_exploitation"
 
 
 class DifficultyHint(StrEnum):
@@ -134,3 +135,6 @@ class GenerationResult:
     noise_types: list[str] = field(default_factory=list)
     timing_jitter_ms: tuple[float, float] | None = None
     encoding_chain: list[str] = field(default_factory=list)
+    # Flag splitting fields (Phase 10)
+    split_count: int = 1
+    split_active: bool = False

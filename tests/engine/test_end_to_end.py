@@ -18,6 +18,7 @@ from ctf_pcaps.engine.flag import (
     ENCODERS,
     extract_printable_strings,
     verify_flag_in_pcap,
+    verify_split_flag_in_pcap,
     verify_stealth,
 )
 
@@ -405,14 +406,20 @@ class TestEndToEndDifficultyMedium:
         # Stealth: literal flag NOT findable in raw strings
         assert verify_stealth(str(result.file_path), "flag{medium_flag}", "base64")
 
-        # Verify flag extractable via chain decode
+        # Verify flag extractable via split chain decode (medium splits into 2)
         from ctf_pcaps.engine.flag import decode_flag_chain
 
         def chain_decode(data):
             return decode_flag_chain(data, ["base64"])
 
-        vr = verify_flag_in_pcap(
-            str(result.file_path), "flag{medium_flag}", "base64", chain_decode
+        assert result.split_count == 2
+        assert result.split_active is True
+        vr = verify_split_flag_in_pcap(
+            str(result.file_path),
+            "flag{medium_flag}",
+            ["base64"],
+            chain_decode,
+            2,
         )
         assert vr["verified"] is True
 
@@ -461,16 +468,20 @@ class TestEndToEndDifficultyHard:
         assert result.flag_verified is True
 
         # Verify we can decode using the exact chain
+        # Hard preset splits into 3-4 parts
         from ctf_pcaps.engine.flag import decode_flag_chain
 
         def chain_decode(data):
             return decode_flag_chain(data, ["rot13", "base64"])
 
-        vr = verify_flag_in_pcap(
+        assert result.split_count >= 3
+        assert result.split_active is True
+        vr = verify_split_flag_in_pcap(
             str(result.file_path),
             "flag{override_flag}",
-            "rot13",
+            ["rot13", "base64"],
             chain_decode,
+            result.split_count,
         )
         assert vr["verified"] is True
 
