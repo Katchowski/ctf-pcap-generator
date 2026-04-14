@@ -52,12 +52,79 @@
     </div>
     <div class="col-md-4 mb-3">
       <label for="batch_difficulty" class="form-label">Difficulty Preset</label>
-      <select class="form-select" name="difficulty" id="batch_difficulty">
+      <select class="form-select" name="difficulty" id="batch_difficulty" onchange="toggleBatchCustomDifficulty(this.value === 'custom')">
         <option value="">None</option>
         <option value="easy">Easy</option>
         <option value="medium">Medium</option>
         <option value="hard">Hard</option>
+        <option value="custom">Custom</option>
       </select>
+    </div>
+  </div>
+
+  <!-- Custom Difficulty Settings for Batch -->
+  <div id="batch-custom-difficulty-fields" style="display: none;" class="card mb-3">
+    <div class="card-header">
+      <h5 class="mb-0">Custom Difficulty Settings</h5>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6 mb-3">
+          <label for="batch_custom_encoding_chain" class="form-label">Encoding Chain</label>
+          <select class="form-select" name="custom_encoding_chain" id="batch_custom_encoding_chain" multiple size="4">
+            {% for enc in encodings %}
+            <option value="{{ enc }}"{% if enc == 'plaintext' %} selected{% endif %}>{{ enc }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Select encodings in order (Ctrl+click for multiple).</div>
+        </div>
+        <div class="col-md-6 mb-3">
+          <label for="batch_custom_noise_types" class="form-label">Noise Types</label>
+          <select class="form-select" name="custom_noise_types" id="batch_custom_noise_types" multiple size="4">
+            {% for nt in noise_types %}
+            <option value="{{ nt }}"{% if nt == 'ARP' %} selected{% endif %}>{{ nt }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Select noise packet types (Ctrl+click for multiple).</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_noise_ratio" class="form-label">Noise Ratio</label>
+          <input type="range" class="form-range" name="custom_noise_ratio" id="batch_custom_noise_ratio"
+                 min="0" max="1" step="0.05" value="{{ custom_defaults.noise_ratio }}"
+                 oninput="document.getElementById('batch_noise_ratio_value').textContent = this.value">
+          <div class="form-text">Ratio: <span id="batch_noise_ratio_value">{{ custom_defaults.noise_ratio }}</span></div>
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_packet_count_min" class="form-label">Packet Count Min</label>
+          <input type="number" class="form-control" name="custom_packet_count_min" id="batch_custom_packet_count_min"
+                 value="{{ custom_defaults.packet_count_min }}" min="1" max="10000">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_packet_count_max" class="form-label">Packet Count Max</label>
+          <input type="number" class="form-control" name="custom_packet_count_max" id="batch_custom_packet_count_max"
+                 value="{{ custom_defaults.packet_count_max }}" min="1" max="10000">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_timing_jitter_min" class="form-label">Timing Jitter Min (ms)</label>
+          <input type="number" class="form-control" name="custom_timing_jitter_min" id="batch_custom_timing_jitter_min"
+                 value="{{ custom_defaults.timing_jitter_ms_min }}" min="0" max="1000" step="0.1">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_timing_jitter_max" class="form-label">Timing Jitter Max (ms)</label>
+          <input type="number" class="form-control" name="custom_timing_jitter_max" id="batch_custom_timing_jitter_max"
+                 value="{{ custom_defaults.timing_jitter_ms_max }}" min="0" max="1000" step="0.1">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="batch_custom_split_count" class="form-label">Flag Split Count</label>
+          <input type="number" class="form-control" name="custom_split_count" id="batch_custom_split_count"
+                 value="{{ custom_defaults.split_count }}" min="1" max="10">
+          <div class="form-text">Number of flag fragments (1 = no splitting)</div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -151,6 +218,13 @@ function toggleAccordionItem(slug, visible) {
     }
 }
 
+function toggleBatchCustomDifficulty(show) {
+    var customFields = document.getElementById('batch-custom-difficulty-fields');
+    if (customFields) {
+        customFields.style.display = show ? 'block' : 'none';
+    }
+}
+
 function startBatchGeneration() {
     var params = new URLSearchParams();
     var checked = document.querySelectorAll('.scenario-checkbox:checked');
@@ -167,8 +241,43 @@ function startBatchGeneration() {
     params.set('flag_format', flagFormat);
 
     var difficulty = document.getElementById('batch_difficulty').value;
-    if (difficulty) {
+    if (difficulty && difficulty !== 'custom') {
         params.set('difficulty', difficulty);
+    } else if (difficulty === 'custom') {
+        // Collect custom difficulty parameters
+        var encodingSelect = document.getElementById('batch_custom_encoding_chain');
+        if (encodingSelect) {
+            var selectedEncodings = Array.from(encodingSelect.selectedOptions).map(opt => opt.value);
+            if (selectedEncodings.length > 0) {
+                params.set('custom_encoding_chain', selectedEncodings.join(','));
+            }
+        }
+
+        var noiseTypesSelect = document.getElementById('batch_custom_noise_types');
+        if (noiseTypesSelect) {
+            var selectedNoiseTypes = Array.from(noiseTypesSelect.selectedOptions).map(opt => opt.value);
+            if (selectedNoiseTypes.length > 0) {
+                params.set('custom_noise_types', selectedNoiseTypes.join(','));
+            }
+        }
+
+        var noiseRatio = document.getElementById('batch_custom_noise_ratio');
+        if (noiseRatio) params.set('custom_noise_ratio', noiseRatio.value);
+
+        var packetCountMin = document.getElementById('batch_custom_packet_count_min');
+        if (packetCountMin) params.set('custom_packet_count_min', packetCountMin.value);
+
+        var packetCountMax = document.getElementById('batch_custom_packet_count_max');
+        if (packetCountMax) params.set('custom_packet_count_max', packetCountMax.value);
+
+        var timingJitterMin = document.getElementById('batch_custom_timing_jitter_min');
+        if (timingJitterMin) params.set('custom_timing_jitter_min', timingJitterMin.value);
+
+        var timingJitterMax = document.getElementById('batch_custom_timing_jitter_max');
+        if (timingJitterMax) params.set('custom_timing_jitter_max', timingJitterMax.value);
+
+        var splitCount = document.getElementById('batch_custom_split_count');
+        if (splitCount) params.set('custom_split_count', splitCount.value);
     }
 
     // Collect per-scenario override values

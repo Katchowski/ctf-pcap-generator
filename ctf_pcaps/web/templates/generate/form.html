@@ -28,9 +28,7 @@
     <div class="mb-3">
       <label for="flag_format" class="form-label">Flag Format</label>
       <select class="form-select" name="flag_format" id="flag_format">
-        <option value="flag">flag{...}</option>
-        <option value="CTF">CTF{...}</option>
-        <option value="ctf">ctf{...}</option>
+        <option value="deCTF">deCTF{...}</option>
       </select>
     </div>
     <div class="mb-3" id="split-count-field">
@@ -49,26 +47,101 @@
   <div class="mb-3">
     <div class="form-check form-check-inline">
       <input class="form-check-input" type="radio" name="difficulty" id="diff_none" value="none" checked
-             hx-get="/api/difficulty/none" hx-target="#difficulty-info" hx-swap="innerHTML">
+             hx-get="/api/difficulty/none" hx-target="#difficulty-info" hx-swap="innerHTML"
+             onchange="toggleCustomDifficulty(false)">
       <label class="form-check-label" for="diff_none">None</label>
     </div>
     <div class="form-check form-check-inline">
       <input class="form-check-input" type="radio" name="difficulty" id="diff_easy" value="easy"
-             hx-get="/api/difficulty/easy" hx-target="#difficulty-info" hx-swap="innerHTML">
+             hx-get="/api/difficulty/easy" hx-target="#difficulty-info" hx-swap="innerHTML"
+             onchange="toggleCustomDifficulty(false)">
       <label class="form-check-label" for="diff_easy">Easy</label>
     </div>
     <div class="form-check form-check-inline">
       <input class="form-check-input" type="radio" name="difficulty" id="diff_medium" value="medium"
-             hx-get="/api/difficulty/medium" hx-target="#difficulty-info" hx-swap="innerHTML">
+             hx-get="/api/difficulty/medium" hx-target="#difficulty-info" hx-swap="innerHTML"
+             onchange="toggleCustomDifficulty(false)">
       <label class="form-check-label" for="diff_medium">Medium</label>
     </div>
     <div class="form-check form-check-inline">
       <input class="form-check-input" type="radio" name="difficulty" id="diff_hard" value="hard"
-             hx-get="/api/difficulty/hard" hx-target="#difficulty-info" hx-swap="innerHTML">
+             hx-get="/api/difficulty/hard" hx-target="#difficulty-info" hx-swap="innerHTML"
+             onchange="toggleCustomDifficulty(false)">
       <label class="form-check-label" for="diff_hard">Hard</label>
+    </div>
+    <div class="form-check form-check-inline">
+      <input class="form-check-input" type="radio" name="difficulty" id="diff_custom" value="custom"
+             onchange="toggleCustomDifficulty(true)">
+      <label class="form-check-label" for="diff_custom">Custom</label>
     </div>
   </div>
   <div id="difficulty-info" class="mt-2"></div>
+
+  <!-- Custom Difficulty Settings -->
+  <div id="custom-difficulty-fields" style="display: none;" class="card mt-3 mb-3">
+    <div class="card-header">
+      <h5 class="mb-0">Custom Difficulty Settings</h5>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6 mb-3">
+          <label for="custom_encoding_chain" class="form-label">Encoding Chain</label>
+          <select class="form-select" name="custom_encoding_chain" id="custom_encoding_chain" multiple size="4">
+            {% for enc in encodings %}
+            <option value="{{ enc }}"{% if enc == 'plaintext' %} selected{% endif %}>{{ enc }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Select encodings in order (Ctrl+click for multiple). Flag will be encoded in sequence.</div>
+        </div>
+        <div class="col-md-6 mb-3">
+          <label for="custom_noise_types" class="form-label">Noise Types</label>
+          <select class="form-select" name="custom_noise_types" id="custom_noise_types" multiple size="4">
+            {% for nt in noise_types %}
+            <option value="{{ nt }}"{% if nt == 'ARP' %} selected{% endif %}>{{ nt }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Select noise packet types (Ctrl+click for multiple).</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-4 mb-3">
+          <label for="custom_noise_ratio" class="form-label">Noise Ratio</label>
+          <input type="range" class="form-range" name="custom_noise_ratio" id="custom_noise_ratio"
+                 min="0" max="1" step="0.05" value="{{ custom_defaults.noise_ratio }}"
+                 oninput="document.getElementById('noise_ratio_value').textContent = this.value">
+          <div class="form-text">Ratio of noise packets: <span id="noise_ratio_value">{{ custom_defaults.noise_ratio }}</span></div>
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="custom_packet_count_min" class="form-label">Packet Count Min</label>
+          <input type="number" class="form-control" name="custom_packet_count_min" id="custom_packet_count_min"
+                 value="{{ custom_defaults.packet_count_min }}" min="1" max="10000">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="custom_packet_count_max" class="form-label">Packet Count Max</label>
+          <input type="number" class="form-control" name="custom_packet_count_max" id="custom_packet_count_max"
+                 value="{{ custom_defaults.packet_count_max }}" min="1" max="10000">
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-4 mb-3">
+          <label for="custom_timing_jitter_min" class="form-label">Timing Jitter Min (ms)</label>
+          <input type="number" class="form-control" name="custom_timing_jitter_min" id="custom_timing_jitter_min"
+                 value="{{ custom_defaults.timing_jitter_ms_min }}" min="0" max="1000" step="0.1">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="custom_timing_jitter_max" class="form-label">Timing Jitter Max (ms)</label>
+          <input type="number" class="form-control" name="custom_timing_jitter_max" id="custom_timing_jitter_max"
+                 value="{{ custom_defaults.timing_jitter_ms_max }}" min="0" max="1000" step="0.1">
+        </div>
+        <div class="col-md-4 mb-3">
+          <label for="custom_split_count" class="form-label">Flag Split Count</label>
+          <input type="number" class="form-control" name="custom_split_count" id="custom_split_count"
+                 value="{{ custom_defaults.split_count }}" min="1" max="10">
+          <div class="form-text">Number of flag fragments (1 = no splitting)</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <h4 class="mt-4">Parameters</h4>
   {% for name, param in scenario.parameters.items() %}
@@ -104,6 +177,24 @@
 
 {% block extra_js %}
 <script>
+function toggleCustomDifficulty(show) {
+    var customFields = document.getElementById('custom-difficulty-fields');
+    var splitField = document.getElementById('split-count-field');
+    var diffInfo = document.getElementById('difficulty-info');
+
+    if (customFields) {
+        customFields.style.display = show ? 'block' : 'none';
+    }
+    if (splitField) {
+        // Hide split count field unless "None" is selected (custom has its own)
+        var diffRadio = document.querySelector('input[name="difficulty"]:checked');
+        splitField.style.display = (diffRadio && diffRadio.value === 'none') ? 'block' : 'none';
+    }
+    if (show && diffInfo) {
+        diffInfo.innerHTML = '';
+    }
+}
+
 document.querySelectorAll('input[name="difficulty"]').forEach(function(radio) {
     radio.addEventListener('change', function() {
         var splitField = document.getElementById('split-count-field');
@@ -112,6 +203,7 @@ document.querySelectorAll('input[name="difficulty"]').forEach(function(radio) {
         }
     });
 });
+
 function startGeneration() {
     var params = new URLSearchParams();
     var embedFlag = document.getElementById('embed_flag');
@@ -121,16 +213,54 @@ function startGeneration() {
         else params.set('flag_text', '');
         params.set('flag_format', document.querySelector('[name="flag_format"]').value);
     }
+
     var diffRadio = document.querySelector('input[name="difficulty"]:checked');
-    if (diffRadio && diffRadio.value !== 'none') {
+    if (diffRadio && diffRadio.value !== 'none' && diffRadio.value !== 'custom') {
+        // Preset difficulty
         params.set('difficulty', diffRadio.value);
-    }
-    if (!diffRadio || diffRadio.value === 'none') {
+    } else if (diffRadio && diffRadio.value === 'custom') {
+        // Custom difficulty - collect all custom parameters
+        var encodingSelect = document.getElementById('custom_encoding_chain');
+        if (encodingSelect) {
+            var selectedEncodings = Array.from(encodingSelect.selectedOptions).map(opt => opt.value);
+            if (selectedEncodings.length > 0) {
+                params.set('custom_encoding_chain', selectedEncodings.join(','));
+            }
+        }
+
+        var noiseTypesSelect = document.getElementById('custom_noise_types');
+        if (noiseTypesSelect) {
+            var selectedNoiseTypes = Array.from(noiseTypesSelect.selectedOptions).map(opt => opt.value);
+            if (selectedNoiseTypes.length > 0) {
+                params.set('custom_noise_types', selectedNoiseTypes.join(','));
+            }
+        }
+
+        var noiseRatio = document.getElementById('custom_noise_ratio');
+        if (noiseRatio) params.set('custom_noise_ratio', noiseRatio.value);
+
+        var packetCountMin = document.getElementById('custom_packet_count_min');
+        if (packetCountMin) params.set('custom_packet_count_min', packetCountMin.value);
+
+        var packetCountMax = document.getElementById('custom_packet_count_max');
+        if (packetCountMax) params.set('custom_packet_count_max', packetCountMax.value);
+
+        var timingJitterMin = document.getElementById('custom_timing_jitter_min');
+        if (timingJitterMin) params.set('custom_timing_jitter_min', timingJitterMin.value);
+
+        var timingJitterMax = document.getElementById('custom_timing_jitter_max');
+        if (timingJitterMax) params.set('custom_timing_jitter_max', timingJitterMax.value);
+
+        var splitCount = document.getElementById('custom_split_count');
+        if (splitCount) params.set('custom_split_count', splitCount.value);
+    } else {
+        // No difficulty - use manual split count if set
         var splitSelect = document.getElementById('split_count');
         if (splitSelect && splitSelect.value !== '1') {
             params.set('split_count', splitSelect.value);
         }
     }
+
     {% for name, param in scenario.parameters.items() %}
     var el = document.querySelector('[name="param_{{ name }}"]');
     if (el) params.set('param_{{ name }}', el.value);

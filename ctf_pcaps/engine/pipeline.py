@@ -22,7 +22,11 @@ from scapy.layers.inet import IP
 import ctf_pcaps.engine.builders  # noqa: F401  # triggers auto-discovery
 from ctf_pcaps.config import get_config
 from ctf_pcaps.engine.cleanup import sweep_stale_files
-from ctf_pcaps.engine.difficulty import resolve_difficulty
+from ctf_pcaps.engine.difficulty import (
+    CustomDifficultyParams,
+    resolve_custom_difficulty,
+    resolve_difficulty,
+)
 from ctf_pcaps.engine.flag import (
     ENCODERS,
     _build_solve_steps_chain,
@@ -133,6 +137,7 @@ def generate(
     flag_encoding: str = "plaintext",
     difficulty: str | None = None,
     split_count: int = 1,
+    custom_difficulty: CustomDifficultyParams | dict | None = None,
 ) -> GenerationResult | list[dict]:
     """Generate a PCAP file from a YAML scenario template.
 
@@ -156,6 +161,9 @@ def generate(
                     When set, preset encoding chain overrides flag_encoding.
         split_count: Number of flag fragments (1 = no splitting). When
                      difficulty is set, preset split_count overrides this.
+        custom_difficulty: Custom difficulty parameters (CustomDifficultyParams
+                          or dict). When provided, overrides the difficulty
+                          preset. Individual parameters can be set independently.
 
     Returns:
         GenerationResult on success, or list of error dicts on failure.
@@ -167,22 +175,41 @@ def generate(
     # Determine if flag embedding is active
     flag_active = flag_text is not _UNSET
 
-    # Step 0: Resolve difficulty preset
-    try:
-        resolved_difficulty = resolve_difficulty(difficulty, overrides)
-    except KeyError as e:
-        error = {
-            "field": "difficulty",
-            "error_type": "invalid_difficulty",
-            "message": str(e),
-        }
-        logger.warning("pipeline_invalid_difficulty", error=error)
-        return [error]
+    # Step 0: Resolve difficulty - custom params take precedence over preset
+    resolved_difficulty = None
+    difficulty_source = None  # Track source for logging: "preset", "custom", or None
+
+    if custom_difficulty is not None:
+        # Custom difficulty parameters provided - use them
+        try:
+            resolved_difficulty = resolve_custom_difficulty(custom_difficulty)
+            difficulty_source = "custom"
+        except Exception as e:
+            error = {
+                "field": "custom_difficulty",
+                "error_type": "invalid_custom_difficulty",
+                "message": str(e),
+            }
+            logger.warning("pipeline_invalid_custom_difficulty", error=error)
+            return [error]
+    elif difficulty is not None:
+        # Preset difficulty specified
+        try:
+            resolved_difficulty = resolve_difficulty(difficulty, overrides)
+            difficulty_source = "preset"
+        except KeyError as e:
+            error = {
+                "field": "difficulty",
+                "error_type": "invalid_difficulty",
+                "message": str(e),
+            }
+            logger.warning("pipeline_invalid_difficulty", error=error)
+            return [error]
 
     difficulty_active = resolved_difficulty is not None
 
-    # When difficulty is active, encoding_chain and split_count from preset
-    # take precedence over manual parameters
+    # When difficulty is active, encoding_chain and split_count from resolved
+    # difficulty take precedence over manual parameters
     if difficulty_active:
         active_encoding_chain = resolved_difficulty["encoding_chain"]
         active_split_count = resolved_difficulty["split_count"]
@@ -198,6 +225,8 @@ def generate(
         output_dir=str(output_dir),
         flag_active=flag_active,
         difficulty=difficulty,
+        difficulty_source=difficulty_source,
+        custom_difficulty=custom_difficulty is not None,
     )
 
     # Step 8.5 pre-check: Validate encoding(s) early
@@ -462,6 +491,16 @@ def generate(
 
     # Step 10: Build result
     elapsed_ms = (time.perf_counter() - start) * 1000
+
+    # Determine difficulty_preset value for result
+    # For presets, use the preset name; for custom, use "custom"
+    if difficulty_source == "preset":
+        result_difficulty_preset = difficulty
+    elif difficulty_source == "custom":
+        result_difficulty_preset = "custom"
+    else:
+        result_difficulty_preset = None
+
     result = GenerationResult(
         file_path=file_path,
         packet_count=packet_count,
@@ -473,7 +512,7 @@ def generate(
         flag_encoding=(active_encoding_chain[0] if flag_active else None),
         flag_verified=True if flag_active else None,
         solve_steps=(verification_result["solve_steps"] if verification_result else []),
-        difficulty_preset=difficulty if difficulty_active else None,
+        difficulty_preset=result_difficulty_preset,
         noise_ratio=(resolved_difficulty["noise_ratio"] if difficulty_active else None),
         packet_count_target=(
             resolved_difficulty["packet_count_target"] if difficulty_active else None

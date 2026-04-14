@@ -4,26 +4,20 @@ version = "0.1.0"
 description = "Generate realistic, flag-embedded PCAP files for CTF competitions"
 requires-python = ">=3.12"
 dependencies = [
-    "flask>=3.1,<4",
-    "gunicorn>=25,<26",
-    "pydantic>=2.12,<3",
-    "pyyaml>=6.0,<7",
-    "requests>=2.32,<3",
-    "scapy>=2.7,<3",
-    "structlog>=25,<26",
+  "flask>=3.1,<4",
+  "gunicorn>=25,<26",
+  "pydantic>=2.12,<3",
+  "pyyaml>=6.0,<7",
+  "requests>=2.32,<3",
+  "scapy>=2.7,<3",
+  "structlog>=25,<26",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=8,<9",
-    "ruff>=0.15",
-]
+dev = ["pytest>=8,<9", "ruff>=0.15"]
 
 [dependency-groups]
-dev = [
-    "pytest>=8,<9",
-    "ruff>=0.15",
-]
+dev = ["pytest>=8,<9", "ruff>=0.15"]
 
 [build-system]
 requires = ["hatchling"]
@@ -44,3 +38,6 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["ctf-pcap-generator/ctf_pcaps"]

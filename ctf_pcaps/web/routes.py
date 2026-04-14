@@ -23,7 +23,12 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from ctf_pcaps.config import get_config
-from ctf_pcaps.engine.difficulty import _PRESETS
+from ctf_pcaps.engine.difficulty import (
+    _PRESETS,
+    get_available_encodings,
+    get_available_noise_types,
+    get_custom_defaults,
+)
 from ctf_pcaps.engine.export import build_challenge_yml, create_export_bundle
 from ctf_pcaps.engine.hints import DEFAULT_POINTS as HINT_DEFAULT_POINTS
 from ctf_pcaps.engine.hints import generate_hints
@@ -184,6 +189,95 @@ def _coerce_form_params(form_data: dict, scenario_params: dict) -> dict | None:
     return overrides if overrides else None
 
 
+def _parse_custom_difficulty_params(args: dict) -> dict | None:
+    """Parse custom difficulty parameters from request args.
+
+    Looks for parameters prefixed with 'custom_' and builds a dict
+    suitable for CustomDifficultyParams.
+
+    Args:
+        args: Request args dict (e.g., request.args).
+
+    Returns:
+        Dict of custom difficulty params, or None if no custom params provided.
+    """
+    custom_params = {}
+
+    # Encoding chain (comma-separated list)
+    encoding_chain = args.get("custom_encoding_chain")
+    if encoding_chain:
+        custom_params["encoding_chain"] = [
+            e.strip() for e in encoding_chain.split(",") if e.strip()
+        ]
+
+    # Noise ratio (float 0.0-1.0)
+    noise_ratio = args.get("custom_noise_ratio")
+    if noise_ratio:
+        try:
+            custom_params["noise_ratio"] = float(noise_ratio)
+        except ValueError:
+            pass
+
+    # Packet count min/max
+    packet_count_min = args.get("custom_packet_count_min")
+    if packet_count_min:
+        try:
+            custom_params["packet_count_min"] = int(packet_count_min)
+        except ValueError:
+            pass
+
+    packet_count_max = args.get("custom_packet_count_max")
+    if packet_count_max:
+        try:
+            custom_params["packet_count_max"] = int(packet_count_max)
+        except ValueError:
+            pass
+
+    # Noise types (comma-separated list or multiple params)
+    noise_types = (
+        args.getlist("custom_noise_types") if hasattr(args, "getlist") else None
+    )
+    if noise_types:
+        # Handle both comma-separated and multiple params
+        all_types = []
+        for nt in noise_types:
+            all_types.extend([t.strip() for t in nt.split(",") if t.strip()])
+        if all_types:
+            custom_params["noise_types"] = all_types
+    else:
+        # Try single value
+        noise_types_single = args.get("custom_noise_types")
+        if noise_types_single:
+            custom_params["noise_types"] = [
+                t.strip() for t in noise_types_single.split(",") if t.strip()
+            ]
+
+    # Timing jitter min/max (in ms)
+    timing_jitter_min = args.get("custom_timing_jitter_min")
+    if timing_jitter_min:
+        try:
+            custom_params["timing_jitter_ms_min"] = float(timing_jitter_min)
+        except ValueError:
+            pass
+
+    timing_jitter_max = args.get("custom_timing_jitter_max")
+    if timing_jitter_max:
+        try:
+            custom_params["timing_jitter_ms_max"] = float(timing_jitter_max)
+        except ValueError:
+            pass
+
+    # Split count
+    split_count = args.get("custom_split_count")
+    if split_count:
+        try:
+            custom_params["split_count"] = int(split_count)
+        except ValueError:
+            pass
+
+    return custom_params if custom_params else None
+
+
 def _format_sse(event_name: str, html: str) -> str:
     """Format an SSE event with multi-line HTML data.
 
@@ -270,6 +364,9 @@ def generate_form(scenario):
         "generate/form.html",
         scenario=scenario_dict,
         presets=list(_PRESETS.keys()),
+        encodings=get_available_encodings(),
+        noise_types=get_available_noise_types(),
+        custom_defaults=get_custom_defaults(),
     )
 
 
@@ -284,6 +381,29 @@ def difficulty_info(preset):
         return "", 204
     preset_obj = _PRESETS[preset]
     return render_template("generate/_difficulty_info.html", preset=preset_obj)
+
+
+@bp.route("/api/difficulty/custom/options")
+def custom_difficulty_options():
+    """Return JSON with available options for custom difficulty settings."""
+    return jsonify(
+        {
+            "encodings": get_available_encodings(),
+            "noise_types": get_available_noise_types(),
+            "defaults": get_custom_defaults(),
+        }
+    )
+
+
+@bp.route("/api/difficulty/custom/form")
+def custom_difficulty_form():
+    """Return an HTMX partial with custom difficulty form fields."""
+    return render_template(
+        "generate/_custom_difficulty_form.html",
+        encodings=get_available_encodings(),
+        noise_types=get_available_noise_types(),
+        defaults=get_custom_defaults(),
+    )
 
 
 @bp.route("/generate/<scenario>/stream")
@@ -323,9 +443,12 @@ def generate_stream(scenario):
     flag_format = request.args.get("flag_format", "flag")
     difficulty = request.args.get("difficulty") or None
 
-    # Parse split_count (only used when no difficulty preset)
+    # Parse split_count (only used when no difficulty preset and no custom difficulty)
     raw_split = request.args.get("split_count")
     split_count = int(raw_split) if raw_split and raw_split.isdigit() else 1
+
+    # Parse custom difficulty parameters
+    custom_difficulty = _parse_custom_difficulty_params(request.args)
 
     # Parse scenario parameter overrides
     overrides = _coerce_form_params(dict(request.args), scenario_dict["parameters"])
@@ -345,6 +468,7 @@ def generate_stream(scenario):
                 "flag_format": flag_format,
                 "difficulty": difficulty,
                 "split_count": split_count,
+                "custom_difficulty": custom_difficulty,
             }
             if flag_text is not _SKIP_FLAG:
                 kwargs["flag_text"] = flag_text
@@ -928,7 +1052,13 @@ def batch_form():
     """Render the batch generation form with scenario checkboxes."""
     scenarios_dir = _get_scenarios_dir()
     scenario_list = discover_scenarios(scenarios_dir)
-    return render_template("batch/form.html", scenarios=scenario_list)
+    return render_template(
+        "batch/form.html",
+        scenarios=scenario_list,
+        encodings=get_available_encodings(),
+        noise_types=get_available_noise_types(),
+        custom_defaults=get_custom_defaults(),
+    )
 
 
 @bp.route("/batch/stream")
@@ -962,6 +1092,9 @@ def batch_stream():
     flag_format = request.args.get("flag_format", "flag")
     difficulty = request.args.get("difficulty") or None
     batch_id = secrets.token_hex(8)
+
+    # Parse custom difficulty parameters for batch
+    custom_difficulty = _parse_custom_difficulty_params(request.args)
 
     scenarios_dir = _get_scenarios_dir()
     all_scenarios = discover_scenarios(scenarios_dir)
@@ -1036,6 +1169,7 @@ def batch_stream():
                     flag_format=flag_format,
                     difficulty=difficulty,
                     flag_text=None,  # Auto-generate unique flag per scenario
+                    custom_difficulty=custom_difficulty,
                 )
 
                 if isinstance(result, GenerationResult):

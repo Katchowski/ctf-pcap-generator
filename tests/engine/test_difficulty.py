@@ -1,8 +1,9 @@
 """Tests for the difficulty preset module.
 
 Tests cover: DifficultyPreset Pydantic model validation, preset constants
-(EASY, MEDIUM, HARD), HARD_ENCODING_CHAINS pool, and resolve_difficulty
-function with override merging.
+(EASY, MEDIUM, HARD), HARD_ENCODING_CHAINS pool, resolve_difficulty
+function with override merging, and CustomDifficultyParams with
+resolve_custom_difficulty.
 
 No Flask imports allowed in engine tests.
 """
@@ -15,7 +16,12 @@ from ctf_pcaps.engine.difficulty import (
     HARD,
     HARD_ENCODING_CHAINS,
     MEDIUM,
+    CustomDifficultyParams,
     DifficultyPreset,
+    get_available_encodings,
+    get_available_noise_types,
+    get_custom_defaults,
+    resolve_custom_difficulty,
     resolve_difficulty,
 )
 
@@ -450,3 +456,206 @@ class TestResolveDifficultySplitCount:
     def test_none_returns_none_unchanged(self):
         """resolve_difficulty(None) still returns None."""
         assert resolve_difficulty(None) is None
+
+
+# ---------------------------------------------------------------------------
+# CustomDifficultyParams Model
+# ---------------------------------------------------------------------------
+
+
+class TestCustomDifficultyParamsModel:
+    """Tests for CustomDifficultyParams Pydantic model."""
+
+    def test_empty_params_accepted(self):
+        """CustomDifficultyParams accepts no fields (all optional)."""
+        params = CustomDifficultyParams()
+        assert params.encoding_chain is None
+        assert params.noise_ratio is None
+        assert params.split_count is None
+
+    def test_full_params_accepted(self):
+        """CustomDifficultyParams accepts all fields."""
+        params = CustomDifficultyParams(
+            encoding_chain=["base64", "hex"],
+            noise_ratio=0.5,
+            packet_count_min=100,
+            packet_count_max=500,
+            noise_types=["ARP", "DNS"],
+            timing_jitter_ms_min=10.0,
+            timing_jitter_ms_max=100.0,
+            split_count=3,
+        )
+        assert params.encoding_chain == ["base64", "hex"]
+        assert params.noise_ratio == 0.5
+        assert params.packet_count_min == 100
+        assert params.packet_count_max == 500
+        assert params.noise_types == ["ARP", "DNS"]
+        assert params.timing_jitter_ms_min == 10.0
+        assert params.timing_jitter_ms_max == 100.0
+        assert params.split_count == 3
+
+    def test_partial_params_accepted(self):
+        """CustomDifficultyParams accepts partial fields."""
+        params = CustomDifficultyParams(
+            noise_ratio=0.75,
+            split_count=2,
+        )
+        assert params.encoding_chain is None
+        assert params.noise_ratio == 0.75
+        assert params.split_count == 2
+
+    def test_noise_ratio_below_zero_rejected(self):
+        """CustomDifficultyParams rejects noise_ratio < 0."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(noise_ratio=-0.1)
+
+    def test_noise_ratio_above_one_rejected(self):
+        """CustomDifficultyParams rejects noise_ratio > 1.0."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(noise_ratio=1.1)
+
+    def test_unknown_encoding_rejected(self):
+        """CustomDifficultyParams rejects unknown encodings."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(encoding_chain=["unknown"])
+
+    def test_unknown_noise_type_rejected(self):
+        """CustomDifficultyParams rejects unknown noise types."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(noise_types=["INVALID"])
+
+    def test_split_count_below_one_rejected(self):
+        """CustomDifficultyParams rejects split_count < 1."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(split_count=0)
+
+    def test_packet_count_min_exceeds_max_rejected(self):
+        """CustomDifficultyParams rejects packet_count_min > packet_count_max."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(packet_count_min=500, packet_count_max=100)
+
+    def test_timing_jitter_min_exceeds_max_rejected(self):
+        """CustomDifficultyParams rejects timing_jitter_ms_min > timing_jitter_ms_max."""
+        with pytest.raises(ValidationError):
+            CustomDifficultyParams(
+                timing_jitter_ms_min=100.0, timing_jitter_ms_max=10.0
+            )
+
+
+# ---------------------------------------------------------------------------
+# resolve_custom_difficulty Function
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCustomDifficulty:
+    """Tests for resolve_custom_difficulty function."""
+
+    def test_none_returns_none(self):
+        """resolve_custom_difficulty(None) returns None."""
+        assert resolve_custom_difficulty(None) is None
+
+    def test_empty_params_returns_defaults(self):
+        """resolve_custom_difficulty with empty params uses defaults."""
+        result = resolve_custom_difficulty({})
+        assert result is not None
+        assert isinstance(result, dict)
+        expected_keys = {
+            "encoding_chain",
+            "noise_ratio",
+            "packet_count_target",
+            "noise_types",
+            "timing_jitter_ms",
+            "split_count",
+        }
+        assert set(result.keys()) == expected_keys
+
+    def test_encoding_chain_override(self):
+        """resolve_custom_difficulty respects encoding_chain override."""
+        result = resolve_custom_difficulty({"encoding_chain": ["base64", "hex"]})
+        assert result["encoding_chain"] == ["base64", "hex"]
+
+    def test_noise_ratio_override(self):
+        """resolve_custom_difficulty respects noise_ratio override."""
+        result = resolve_custom_difficulty({"noise_ratio": 0.75})
+        assert result["noise_ratio"] == 0.75
+
+    def test_packet_count_min_only(self):
+        """resolve_custom_difficulty handles packet_count_min without max."""
+        result = resolve_custom_difficulty({"packet_count_min": 1000})
+        assert result["packet_count_target"] >= 1000
+
+    def test_packet_count_max_only(self):
+        """resolve_custom_difficulty handles packet_count_max without min."""
+        result = resolve_custom_difficulty({"packet_count_max": 100})
+        assert result["packet_count_target"] <= 100
+
+    def test_noise_types_override(self):
+        """resolve_custom_difficulty respects noise_types override."""
+        result = resolve_custom_difficulty({"noise_types": ["ARP", "ICMP"]})
+        assert result["noise_types"] == ["ARP", "ICMP"]
+
+    def test_timing_jitter_override(self):
+        """resolve_custom_difficulty respects timing_jitter overrides."""
+        result = resolve_custom_difficulty(
+            {
+                "timing_jitter_ms_min": 1.0,
+                "timing_jitter_ms_max": 10.0,
+            }
+        )
+        assert result["timing_jitter_ms"] == (1.0, 10.0)
+
+    def test_split_count_override(self):
+        """resolve_custom_difficulty respects split_count override."""
+        result = resolve_custom_difficulty({"split_count": 4})
+        assert result["split_count"] == 4
+
+    def test_accepts_custom_difficulty_params_instance(self):
+        """resolve_custom_difficulty accepts CustomDifficultyParams instance."""
+        params = CustomDifficultyParams(noise_ratio=0.5, split_count=2)
+        result = resolve_custom_difficulty(params)
+        assert result["noise_ratio"] == 0.5
+        assert result["split_count"] == 2
+
+    def test_packet_count_in_range(self):
+        """resolve_custom_difficulty randomizes packet_count_target within range."""
+        for _ in range(20):
+            result = resolve_custom_difficulty(
+                {
+                    "packet_count_min": 100,
+                    "packet_count_max": 200,
+                }
+            )
+            assert 100 <= result["packet_count_target"] <= 200
+
+
+# ---------------------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------------------
+
+
+class TestHelperFunctions:
+    """Tests for helper functions."""
+
+    def test_get_available_encodings(self):
+        """get_available_encodings returns list of valid encodings."""
+        encodings = get_available_encodings()
+        assert isinstance(encodings, list)
+        assert len(encodings) > 0
+        assert "plaintext" in encodings
+        assert "base64" in encodings
+
+    def test_get_available_noise_types(self):
+        """get_available_noise_types returns list of valid noise types."""
+        noise_types = get_available_noise_types()
+        assert isinstance(noise_types, list)
+        assert len(noise_types) > 0
+        assert "ARP" in noise_types
+        assert "DNS" in noise_types
+
+    def test_get_custom_defaults(self):
+        """get_custom_defaults returns dict with default values."""
+        defaults = get_custom_defaults()
+        assert isinstance(defaults, dict)
+        assert "encoding_chain" in defaults
+        assert "noise_ratio" in defaults
+        assert "split_count" in defaults

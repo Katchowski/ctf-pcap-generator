@@ -108,7 +108,7 @@ wheels = [
 ]
 
 [[package]]
-name = "ctf-pcaps"
+name = "ctf-pcap-generator"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
